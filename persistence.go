@@ -15,6 +15,7 @@ import (
 // "Search" is just by tags with a rather badly constructed search query builder
 // It may be wise to migrate to a schema that uses the SQLite FTS5 (Full Text Search) extension
 // It handles the search term language on its own
+// However it is more difficult to search by tag given the table layout I am using
 
 func initDB(db *sql.DB) error {
 	tx, err := db.Begin()
@@ -292,7 +293,7 @@ func lookup2(db *sql.DB, params SearchParameters) ([]map[string]string, error) {
 		for _, v := range params.Vals {
 			bricks = append(bricks, glue)
 			//bricks = append(bricks, "filename in (select distinct(filename) from tags where val like '%' || ? || '%')")
-			bricks = append(bricks, "filename in (select distinct(filename) from tags where INSTR(val, ?) > 0)")
+			bricks = append(bricks, "filename in (select distinct(filename) from tags where INSTR(LOWER(val), LOWER(?)) > 0)")
 			fills = append(fills, v)
 			glue = "and"
 		}
@@ -302,7 +303,7 @@ func lookup2(db *sql.DB, params SearchParameters) ([]map[string]string, error) {
 		for k, v := range params.KeyVals {
 			bricks = append(bricks, glue)
 			//bricks = append(bricks, "filename in (select filename from tags where name is ? and val like '%' || ? || '%')")
-			bricks = append(bricks, "filename in (select filename from tags where name is ? and INSTR(val, ?) > 0)")
+			bricks = append(bricks, "filename in (select filename from tags where name is ? and INSTR(LOWER(val), LOWER(?)) > 0)")
 			fills = append(fills, k, v)
 			glue = "and"
 		}

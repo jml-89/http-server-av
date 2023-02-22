@@ -1,5 +1,12 @@
 package main
 
+// TODO#1
+// Streaming media
+// TODO#2
+// Javascript player
+// TODO#3
+// Fix memory leak in ffmpeg usage
+
 import (
 	"database/sql"
 	_ "github.com/mattn/go-sqlite3"
@@ -30,41 +37,45 @@ func main() {
 	//db.SetMaxOpenConn(1)
 	pathDb := "file:info.db?_journal_mode=WAL&mode=rwc"
 
+	log.Printf("Opening database %s\n", pathDb)
 	db, err := sql.Open("sqlite3", pathDb)
 	if err != nil {
 		log.Fatalf("Failed to open %s: %s\n", pathDb, err)
 	}
 	defer db.Close()
 
+	log.Printf("Initialising database...\n");
 	err = initDB(db)
 	if err != nil {
 		log.Fatalf("Failed to initialise DB tables: %s\n", err)
 	}
 
+	log.Printf("Adding media files to database...\n")
 	count, err := addFilesToDB(db, pathMedia)
 	if err != nil {
 		log.Fatal(err)
 	}
 	log.Printf("%v files added to database\n", count)
 
+	log.Printf("Conducting word count...\n")
 	err = wordcount(db)
 	if err != nil {
 		log.Fatal(err)
 	}
 
+	log.Printf("Fixing tags...\n")
 	err = fixtags(db)
 	if err != nil {
 		log.Fatal(err)
 	}
 
+	log.Printf("Culling missing files...\n")
 	err = cullMissing(db, pathMedia)
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	http.Handle("/file/", http.StripPrefix("/file/", http.FileServer(http.Dir(pathMedia))))
-	//thumbnails will be served out of database instead of from filesystem
-	//http.HandleFunc("/watch/", serveVideo(db))
 	http.HandleFunc("/tmb/", serveThumbs(db))
 	rs, err := addRoutes(db)
 	if err != nil {

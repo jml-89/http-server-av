@@ -1,5 +1,11 @@
 package main
 
+// DESIGN#2
+// In order for this whole thing to compile neatly into one binary with no file dependencies
+// The templates, json config, etc. are all here in string literals
+// This is fine (really?) for deployment but for development this is annoying
+// Having ot recompile every time you want to see changes in HTML/config reflect
+
 var templates = map[string]string{
 	"base": `
 <html>
@@ -74,7 +80,7 @@ var templates = map[string]string{
 	</video>
 	<div id="video-description">
 		<h1>{{$elem.title}}</h1>
-		<h2>Created by <a href="/search/?terms=artist:&quot;{{$elem.artist}}&quot;">{{$elem.artist}}</a></h2>
+		<h2>Created by <a href="/search?terms=artist:&quot;{{$elem.artist}}&quot;">{{$elem.artist}}</a></h2>
 		<h3>Uploaded on {{$elem.date}}</h3>
 		<pre>{{$elem.description}}</pre>
 	</div>
