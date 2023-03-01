@@ -77,6 +77,89 @@ func GetMetadata(path string) (map[string]string, error) {
 	return res, nil
 }
 
+func CreateEncoderWEBP(dctx *C.AVCodecContext, pathOut string) (*C.AVFormatContext, *C.AVCodecContext, error) {
+	var octx *C.AVFormatContext = nil
+	var ectx *C.AVCodecContext = nil
+
+	cfmt := C.CString("webp")
+	defer C.free(unsafe.Pointer(cfmt))
+
+	err := avop(C.avformat_alloc_output_context2(&octx, nil, cfmt, nil))
+	if err != nil {
+		return nil, nil, err
+	}
+
+	os := C.avformat_new_stream(octx, nil)
+	if os == nil {
+		C.avformat_free_context(octx)
+		return nil, nil, errors.New("Failed to create stream")
+	}
+
+	enc := C.avcodec_find_encoder(C.AV_CODEC_ID_WEBP)
+	if enc == nil {
+		C.avformat_free_context(octx)
+		return nil, nil, errors.New("Failed to find WEBP encoder!")
+	}
+
+	ectx = C.avcodec_alloc_context3(enc)
+	if ectx == nil {
+		C.avformat_free_context(octx)
+		return nil, nil, errors.New("Failed to create encoder context")
+	}
+
+	h := C.double(540.0)
+	ratio := h / (C.double)(dctx.height)
+	w := (C.double)(dctx.width) * ratio
+
+	ectx.width = (C.int)(w)
+	ectx.height = (C.int)(h)
+
+	pixi := C.get_pix_fmt(enc.pix_fmts, C.AV_PIX_FMT_YUV420P)
+	if pixi == -1 {
+		C.avcodec_free_context(&ectx)
+		C.avformat_free_context(octx)
+		return nil, nil, errors.New("Failed to find preferred pixel format")
+	}
+
+	ectx.pix_fmt = C.AV_PIX_FMT_YUV420P
+
+	ectx.time_base.num = 1
+	ectx.time_base.den = 1
+
+	err = avop(C.avcodec_open2(ectx, enc, nil))
+	if err != nil {
+		C.avcodec_free_context(&ectx)
+		C.avformat_free_context(octx)
+		return nil, nil, err
+	}
+
+	err = avop(C.avcodec_parameters_from_context(os.codecpar, ectx))
+	if err != nil {
+		C.avcodec_free_context(&ectx)
+		C.avformat_free_context(octx)
+		return nil, nil, err
+	}
+
+	pathTmp := C.CString(pathOut)
+	defer C.free(unsafe.Pointer(pathTmp))
+	err = avop(C.avio_open(&octx.pb, pathTmp, C.AVIO_FLAG_WRITE))
+	if err != nil {
+		C.avcodec_free_context(&ectx)
+		C.avformat_free_context(octx)
+		return nil, nil, err
+	}
+
+	err = avop(C.avformat_write_header(octx, nil))
+	if err != nil {
+		C.avcodec_free_context(&ectx)
+		C.avformat_free_context(octx)
+		return nil, nil, err
+	}
+
+	return octx, ectx, nil
+}
+
+
 func CreateEncoderJPG(dctx *C.AVCodecContext, pathOut string) (*C.AVFormatContext, *C.AVCodecContext, error) {
 	var octx *C.AVFormatContext = nil
 	var ectx *C.AVCodecContext = nil
@@ -273,7 +356,22 @@ func OpenVideoStream(ctxFmt *C.AVFormatContext) (C.uint, *C.AVCodecContext, erro
 	return idxStream, ctxDec, nil
 }
 
+var errSeekFailed = errors.New("Seek failed")
+
 func CreateThumbnail(pathIn string) ([]byte, error) {
+	b, err := CreateThumbnailX(pathIn, true)
+
+	// Some streams don't support seeking
+	// In this case just do a thumbnail of the first frame
+	// Better than nothing... I guess
+	if errors.Is(err, errSeekFailed) {
+		b, err = CreateThumbnailX(pathIn, false)
+	}
+	return b, err
+}
+
+
+func CreateThumbnailX(pathIn string, seek bool) ([]byte, error) {
 	//return nil, errors.New("This is a test")
 
 	var ctxFmtIn *C.AVFormatContext = nil
@@ -282,7 +380,7 @@ func CreateThumbnail(pathIn string) ([]byte, error) {
 
 	err := avop(C.avformat_open_input(&ctxFmtIn, pathInArg, nil, nil))
 	if err != nil {
-		log.Printf("%s: %s\n", pathIn, err)
+		// if it fails here, it's because the file wasn't a media file 
 		return nil, err
 	}
 	defer C.avformat_close_input(&ctxFmtIn)
@@ -299,13 +397,14 @@ func CreateThumbnail(pathIn string) ([]byte, error) {
 	}
 	defer C.avcodec_close(ctxDec)
 
-	tmpFile, err := os.CreateTemp(os.TempDir(), "")
+	tmpFile, err := os.CreateTemp(os.TempDir(), "servemediago-")
 	if err != nil {
 		log.Printf("%s: %s\n", pathIn, err)
 		return nil, err
 	}
+	defer os.Remove(tmpFile.Name())
 
-	ctxFmtOut, ctxEnc, err := CreateEncoderJPG(ctxDec, tmpFile.Name())
+	ctxFmtOut, ctxEnc, err := CreateEncoderWEBP(ctxDec, tmpFile.Name())
 	if err != nil {
 		log.Printf("%s: %s\n", pathIn, err)
 		return nil, err
@@ -321,19 +420,18 @@ func CreateThumbnail(pathIn string) ([]byte, error) {
 	}
 	defer C.avfilter_graph_free(&graph)
 
-	durationSeconds := ctxFmtIn.duration / C.AV_TIME_BASE
-	var midPos C.AVRational
-	midPos.num = C.int(durationSeconds / 2)
-	midPos.den = 1
+	if seek {
+		durationSeconds := ctxFmtIn.duration / C.AV_TIME_BASE
+		var midPos C.AVRational
+		midPos.num = C.int(durationSeconds / 2)
+		midPos.den = 1
 
-	rts := C.av_mul_q(midPos, C.av_inv_q(C.get_nth_stream(ctxFmtIn, idxStream).time_base))
-	timestamp := C.av_q2d(rts)
-	err = avop(C.av_seek_frame(ctxFmtIn, C.int(idxStream), C.long(timestamp), 0))
-	if err != nil {
-		log.Printf("%s: %s\n", pathIn, err)
-		// Some streams don't support seeking
-		// In this case just do a thumbnail of the first frame
-		// Better than nothing... I guess
+		rts := C.av_mul_q(midPos, C.av_inv_q(C.get_nth_stream(ctxFmtIn, idxStream).time_base))
+		timestamp := C.av_q2d(rts)
+		err = avop(C.av_seek_frame(ctxFmtIn, C.int(idxStream), C.long(timestamp), 0))
+		if err != nil {
+			return nil, errSeekFailed
+		}
 	}
 
 	pktDec := C.av_packet_alloc()
@@ -351,7 +449,7 @@ func CreateThumbnail(pathIn string) ([]byte, error) {
 	for true {
 		err = avop(C.av_read_frame(ctxFmtIn, pktDec))
 		if err != nil {
-		log.Printf("%s: %s\n", pathIn, err)
+			log.Printf("%s: %s\n", pathIn, err)
 			return nil, err
 		}
 
@@ -408,6 +506,12 @@ func CreateThumbnail(pathIn string) ([]byte, error) {
 		return nil, err
 	}
 
+	err = avop(C.avcodec_send_frame(ctxEnc, nil))
+	if err != nil {
+		log.Printf("%s: %s\n", pathIn, err)
+		return nil, err
+	}
+
 	err = avop(C.avcodec_receive_packet(ctxEnc, pktEnc))
 	if err != nil {
 		log.Printf("%s: %s\n", pathIn, err)
@@ -433,12 +537,6 @@ func CreateThumbnail(pathIn string) ([]byte, error) {
 	}
 
 	rawThumb, err := io.ReadAll(tmpFile)
-	if err != nil {
-		log.Printf("%s: %s\n", pathIn, err)
-		return nil, err
-	}
-
-	err = os.Remove(tmpFile.Name())
 	if err != nil {
 		log.Printf("%s: %s\n", pathIn, err)
 		return nil, err

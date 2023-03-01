@@ -87,7 +87,7 @@ func addFilesToDB(db *sql.DB, path string) (int, error) {
 
 		metadata["diskfiletime"] = info.ModTime().UTC().Format("2006-01-02T15:04:05")
 		metadata["diskfilename"] = filename
-		thumbname := fmt.Sprintf("%s.jpg", filename)
+		thumbname := fmt.Sprintf("%s.webp", filename)
 		metadata["thumbname"] = thumbname
 
 		tx, err := db.Begin()
