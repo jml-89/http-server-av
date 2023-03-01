@@ -18,19 +18,24 @@ import (
 // However it is more difficult to search by tag given the table layout I am using
 
 func initDB(db *sql.DB) error {
+	log.Println("Initialising database")
+
 	tx, err := db.Begin()
 	if err != nil {
+		log.Println(err)
 		return err
 	}
 	defer tx.Rollback()
 
 	_, err = tx.Exec("CREATE TABLE IF NOT EXISTS tags (filename text, name text, val text, PRIMARY KEY(filename, name));")
 	if err != nil {
+		log.Println(err)
 		return err
 	}
 
 	_, err = tx.Exec("CREATE TABLE IF NOT EXISTS thumbnails (filename text, image blob, PRIMARY KEY(filename));")
 	if err != nil {
+		log.Println(err)
 		return err
 	}
 
@@ -39,6 +44,8 @@ func initDB(db *sql.DB) error {
 		log.Println(err)
 		return err
 	}
+
+	log.Println("Database initialised")
 
 	return nil
 }
@@ -61,6 +68,28 @@ func addFilesToDB(db *sql.DB, path string) (int, error) {
 	log.Printf("%v candidates valid\n", len(filenames))
 
 	for _, filename := range filenames {
+		// Assume any failed thumbnail gen means it wasn't a media file
+		// what about audio? audio is skipped
+		thumbnail, err := CreateThumbnail(filename)
+		if err != nil {
+			continue
+		}
+
+		metadata, err := GetMetadata(filename)
+		if err != nil {
+			return count, err
+		}
+
+		info, err := os.Stat(filename)
+		if err != nil {
+			return count, err
+		}
+
+		metadata["diskfiletime"] = info.ModTime().UTC().Format("2006-01-02T15:04:05")
+		metadata["diskfilename"] = filename
+		thumbname := fmt.Sprintf("%s.jpg", filename)
+		metadata["thumbname"] = thumbname
+
 		tx, err := db.Begin()
 		if err != nil {
 			return count, err
@@ -79,34 +108,11 @@ func addFilesToDB(db *sql.DB, path string) (int, error) {
 		}
 		defer stmtMetadata.Close()
 
-		// Assume any failed thumbnail gen means it wasn't a media file
-		// what about audio? audio is skipped
-		thumbnail, err := CreateThumbnail(filename)
-		if err != nil {
-			continue
-		}
-
-		thumbname := fmt.Sprintf("%s.jpg", filename)
 
 		_, err = stmtThumb.Exec(thumbname, thumbnail)
 		if err != nil {
 			return count, err
 		}
-
-		metadata, err := GetMetadata(filename)
-		if err != nil {
-			return count, err
-		}
-
-		info, err := os.Stat(filename)
-		if err != nil {
-			return count, err
-		}
-
-		metadata["diskfiletime"] = info.ModTime().UTC().Format("2006-01-02T15:04:05")
-		metadata["diskfilename"] = filename
-		metadata["thumbname"] = thumbname
-		//metadata["thumbnail"] = fmt.Sprintf("/tmb/%s", filename)
 
 		for k, v := range metadata {
 			_, err = stmtMetadata.Exec(filename, k, v)
@@ -116,13 +122,14 @@ func addFilesToDB(db *sql.DB, path string) (int, error) {
 			}
 		}
 
-		count++
-
 		err = tx.Commit()
 		if err != nil {
 			log.Println(err)
 			return count, err
 		}
+
+		count++
+
 	}
 
 	return count, nil
@@ -193,13 +200,7 @@ func cullMissing(db *sql.DB, dir string) error {
 func differenceFilesDB(db *sql.DB, filenames []string) ([]string, error) {
 	newFiles := make([]string, 0, len(filenames))
 
-	tx, err := db.Begin()
-	if err != nil {
-		log.Println(err)
-		return newFiles, err
-	}
-
-	rows, err := tx.Query("select filename from tags where name is 'diskfilename';")
+	rows, err := db.Query("select filename from tags where name is 'diskfilename';")
 	if err != nil {
 		log.Println(err)
 		return newFiles, err
@@ -403,19 +404,20 @@ func wordcount(db *sql.DB) error {
 		return err
 	}
 
-	rows, err := db.Query("select val from tags;")
-	if err != nil {
-		log.Println(err)
-		return err
-	}
-	defer rows.Close()
-
 	tx, err := db.Begin()
 	if err != nil {
 		log.Println(err)
 		return err
 	}
 	defer tx.Rollback()
+
+	rows, err := tx.Query("select val from tags;")
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+	defer rows.Close()
+
 
 	stmtUpdate, err := tx.Prepare("insert into wordcounts(word) values(?) on conflict(word) do update set num = num + 1;")
 	if err != nil {

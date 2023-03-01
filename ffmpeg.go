@@ -36,7 +36,7 @@ import (
 	"os"
 	"io"
 	"unsafe"
-	//"log"
+	"log"
 	"fmt"
 	"errors"
 )
@@ -114,14 +114,14 @@ func CreateEncoderJPG(dctx *C.AVCodecContext, pathOut string) (*C.AVFormatContex
 	ectx.width = (C.int)(w)
 	ectx.height = (C.int)(h)
 
-	pixi := C.get_pix_fmt(enc.pix_fmts, C.AV_PIX_FMT_YUVJ444P)
+	pixi := C.get_pix_fmt(enc.pix_fmts, C.AV_PIX_FMT_YUVJ420P)
 	if pixi == -1 {
 		C.avcodec_free_context(&ectx)
 		C.avformat_free_context(octx)
 		return nil, nil, errors.New("Failed to find preferred pixel format")
 	}
 
-	ectx.pix_fmt = C.AV_PIX_FMT_YUVJ444P
+	ectx.pix_fmt = C.AV_PIX_FMT_YUVJ420P
 
 	ectx.time_base.num = 1
 	ectx.time_base.den = 1
@@ -239,16 +239,8 @@ func InitFilters(ctxEnc, ctxDec *C.AVCodecContext) (*C.AVFilterGraph, *C.AVFilte
 }
 
 func OpenVideoStream(ctxFmt *C.AVFormatContext) (C.uint, *C.AVCodecContext, error) {
-	idxStream := C.uint(0)
-
-	/*
-	err := avop(C.avformat_find_stream_info(ctxFmt, nil))
-	if err != nil {
-		return idxStream, nil, err
-	}
-	*/
-
 	streamFound := false
+	idxStream := C.uint(0)
 	for i := C.uint(0); i < ctxFmt.nb_streams; i++ {
 		if C.get_nth_stream(ctxFmt, i).codecpar.codec_type == C.AVMEDIA_TYPE_VIDEO {
 			streamFound = true
@@ -282,16 +274,22 @@ func OpenVideoStream(ctxFmt *C.AVFormatContext) (C.uint, *C.AVCodecContext, erro
 }
 
 func CreateThumbnail(pathIn string) ([]byte, error) {
+	//return nil, errors.New("This is a test")
+
 	var ctxFmtIn *C.AVFormatContext = nil
 	pathInArg := C.CString(pathIn)
 	defer C.free(unsafe.Pointer(pathInArg))
+
 	err := avop(C.avformat_open_input(&ctxFmtIn, pathInArg, nil, nil))
 	if err != nil {
+		log.Printf("%s: %s\n", pathIn, err)
 		return nil, err
 	}
+	defer C.avformat_close_input(&ctxFmtIn)
 
 	err = avop(C.avformat_find_stream_info(ctxFmtIn, nil))
 	if err != nil {
+		log.Printf("%s: %s\n", pathIn, err)
 		return nil, err
 	}
 
@@ -303,18 +301,22 @@ func CreateThumbnail(pathIn string) ([]byte, error) {
 
 	tmpFile, err := os.CreateTemp(os.TempDir(), "")
 	if err != nil {
+		log.Printf("%s: %s\n", pathIn, err)
 		return nil, err
 	}
 
 	ctxFmtOut, ctxEnc, err := CreateEncoderJPG(ctxDec, tmpFile.Name())
 	if err != nil {
+		log.Printf("%s: %s\n", pathIn, err)
 		return nil, err
 	}
 	defer C.avformat_free_context(ctxFmtOut)
 	defer C.avcodec_close(ctxEnc)
+	defer C.avio_closep(&ctxFmtOut.pb)
 
 	graph, ctxSrc, ctxSnk, err := InitFilters(ctxEnc, ctxDec)
 	if err != nil {
+		log.Printf("%s: %s\n", pathIn, err)
 		return nil, err
 	}
 	defer C.avfilter_graph_free(&graph)
@@ -328,7 +330,10 @@ func CreateThumbnail(pathIn string) ([]byte, error) {
 	timestamp := C.av_q2d(rts)
 	err = avop(C.av_seek_frame(ctxFmtIn, C.int(idxStream), C.long(timestamp), 0))
 	if err != nil {
-		return nil, err
+		log.Printf("%s: %s\n", pathIn, err)
+		// Some streams don't support seeking
+		// In this case just do a thumbnail of the first frame
+		// Better than nothing... I guess
 	}
 
 	pktDec := C.av_packet_alloc()
@@ -346,6 +351,7 @@ func CreateThumbnail(pathIn string) ([]byte, error) {
 	for true {
 		err = avop(C.av_read_frame(ctxFmtIn, pktDec))
 		if err != nil {
+		log.Printf("%s: %s\n", pathIn, err)
 			return nil, err
 		}
 
@@ -357,23 +363,22 @@ func CreateThumbnail(pathIn string) ([]byte, error) {
 		err = avop(C.avcodec_send_packet(ctxDec, pktDec))
 		if err != nil {
 			C.av_packet_unref(pktDec)
+			log.Printf("%s: %s\n", pathIn, err)
 			return nil, err
 		}
 
 		rc := C.avcodec_receive_frame(ctxDec, frame)
-		switch {
 			// should be C.AVERROR(C.EAGAIN) but doesn't work
 			// AVERROR definition in error.h is
 			// #define AVERROR(e) (-(e))
 			// so just negative of EAGAIN to check
-		case rc == -C.EAGAIN:
+		if rc == -C.EAGAIN {
 			C.av_packet_unref(pktDec)
 			continue
-		case rc == C.AVERROR_EOF:
+		}
+		if rc < 0 {
 			C.av_packet_unref(pktDec)
-			return nil, errors.New("Failed to decode frame")
-		case rc < 0:
-			C.av_packet_unref(pktDec)
+			log.Printf("%s: %s\n", pathIn, err)
 			return nil, errors.New("Failed to decode frame")
 		}
 
@@ -387,26 +392,31 @@ func CreateThumbnail(pathIn string) ([]byte, error) {
 
 	err = avop(C.av_buffersrc_add_frame_flags(ctxSrc, frame, 0))
 	if err != nil {
+		log.Printf("%s: %s\n", pathIn, err)
 		return nil, err
 	}
 
 	err = avop(C.av_buffersink_get_frame(ctxSnk, frameFiltered))
 	if err != nil {
+		log.Printf("%s: %s\n", pathIn, err)
 		return nil, err
 	}
 
 	err = avop(C.avcodec_send_frame(ctxEnc, frameFiltered))
 	if err != nil {
+		log.Printf("%s: %s\n", pathIn, err)
 		return nil, err
 	}
 
 	err = avop(C.avcodec_receive_packet(ctxEnc, pktEnc))
 	if err != nil {
+		log.Printf("%s: %s\n", pathIn, err)
 		return nil, err
 	}
 
 	err = avop(C.av_write_frame(ctxFmtOut, pktEnc))
 	if err != nil {
+		log.Printf("%s: %s\n", pathIn, err)
 		return nil, err
 	}
 
@@ -418,21 +428,19 @@ func CreateThumbnail(pathIn string) ([]byte, error) {
 
 	err = avop(C.av_write_trailer(ctxFmtOut))
 	if err != nil {
-		return nil, err
-	}
-
-	err = avop(C.avio_closep(&ctxFmtOut.pb))
-	if err != nil {
+		log.Printf("%s: %s\n", pathIn, err)
 		return nil, err
 	}
 
 	rawThumb, err := io.ReadAll(tmpFile)
 	if err != nil {
+		log.Printf("%s: %s\n", pathIn, err)
 		return nil, err
 	}
 
 	err = os.Remove(tmpFile.Name())
 	if err != nil {
+		log.Printf("%s: %s\n", pathIn, err)
 		return nil, err
 	}
 

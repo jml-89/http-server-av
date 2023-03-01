@@ -12,6 +12,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	"log"
 	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"path/filepath"
 )
@@ -19,6 +20,12 @@ import (
 var usage = "servemedia [path]"
 
 func main() {
+	done := make(chan bool)
+	go func() {
+		http.ListenAndServe(":8080", nil)
+		done<- true
+	}()
+	
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 
 	if len(os.Args) > 1 {
@@ -34,8 +41,7 @@ func main() {
 	}
 	pathMedia = "."
 
-	//db.SetMaxOpenConn(1)
-	pathDb := "file:info.db?_journal_mode=WAL&mode=rwc"
+	pathDb := "info.db"
 
 	log.Printf("Opening database %s\n", pathDb)
 	db, err := sql.Open("sqlite3", pathDb)
@@ -82,7 +88,9 @@ func main() {
 		log.Fatal(err)
 	}
 	http.HandleFunc("/search", createSearchHandler(db, rs))
-	log.Fatal(http.ListenAndServe(":8080", nil))
+	//log.Fatal(http.ListenAndServe(":8080", nil))
+
+	_ = <-done
 
 	return
 }
