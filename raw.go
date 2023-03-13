@@ -63,7 +63,7 @@ var templates = map[string]string{
 			</div>
 
 			<form id="search-area" action="search" method="get">
-				<input type="text" name="terms" id="search-terms" required>
+				<input type="text" name="terms" id="search-terms" value="{{range .terms}}{{.}} {{end}}" required>
 				<input type="submit" value="Search">
 			</form>
 		</div>
