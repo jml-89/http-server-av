@@ -63,11 +63,13 @@ func main() {
 	}
 	log.Printf("%v files added to database\n", count)
 
+	/*
 	log.Printf("Conducting word count...\n")
 	err = wordcount(db)
 	if err != nil {
 		log.Fatal(err)
 	}
+	*/
 
 	log.Printf("Fixing tags...\n")
 	err = fixtags(db)

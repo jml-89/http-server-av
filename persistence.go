@@ -264,7 +264,8 @@ func getAllTags(db *sql.DB, filename string) (map[string]string, error) {
 		count++
 	}
 
-	res["filename"] = url.PathEscape(filename)
+	res["filenamequery"] = url.QueryEscape(filename)
+	res["filenamepath"] = url.PathEscape(filename)
 	res["thumbname"] = url.PathEscape(res["thumbname"])
 
 	return res, nil

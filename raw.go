@@ -75,8 +75,8 @@ var templates = map[string]string{
 <div>
 {{range $idx, $elem := .media}}
 	<video controls>
-		<source src="/file/{{$elem.filename}}">
-		<a href="/file/{{$elem.filename}}">Download</a>
+		<source src="/file/{{$elem.filenamepath}}">
+		<a href="/file/{{$elem.filenamepath}}">Download</a>
 	</video>
 	<div id="video-description">
 		<h1>{{$elem.title}}</h1>
@@ -103,8 +103,8 @@ var templates = map[string]string{
 <div id="thumbs">
 {{range $idx, $elem := .media}}
 	<div class="media-item">
-		<a href="/watch?arg={{$elem.filename}}"><img src="/tmb/{{$elem.thumbname}}"/></a>
-		<a href="/watch?arg={{$elem.filename}}"><h2>{{$elem.diskfilename}}</h2></a>
+		<a href="/watch?arg={{$elem.filenamequery}}"><img src="/tmb/{{$elem.thumbname}}"/></a>
+		<a href="/watch?arg={{$elem.filenamequery}}"><h2>{{$elem.diskfilename}}</h2></a>
 	</div>
 {{end}}
 </div>
