@@ -4,9 +4,9 @@ package main
 // In order for this whole thing to compile neatly into one binary with no file dependencies
 // The templates, json config, etc. are all here in string literals
 // This is fine (really?) for deployment but for development this is annoying
-// Having ot recompile every time you want to see changes in HTML/config reflect
+// Having to recompile every time you want to see changes in HTML/config reflect
 
-var templates = map[string]string{
+var starterTemplates = map[string]string{
 	"base": `
 <html>
 	<head>
@@ -47,6 +47,15 @@ var templates = map[string]string{
 			justify-content: center;
 		}
 
+		#templates {
+			display: flex;
+			flex-direction: column;
+		}
+
+		pre {
+			font: 100% sans-serif;
+		}
+
 		img,
 		picture,
 		video,
@@ -70,6 +79,18 @@ var templates = map[string]string{
 		{{template "body" .}}
 	</body>
 </html>
+`,
+"templates":`
+<div class="templates">
+{{range $idx, $elem := .elements}}
+	<form id="form-{{index $elem 0}}" action="templates" method="post">
+		<h2>{{index $elem 0}}</h2>
+		<textarea name="raw">{{index $elem 1}}</textarea>
+		<input type="hidden" name="name" value="{{index $elem 0}}">
+		<input type="submit" value="Update">
+	</form>
+{{end}}
+</div>
 `,
 "video":`
 <div>
@@ -148,6 +169,11 @@ var templates = map[string]string{
 </html>
 `}
 
+var Fastlinks []Route = []Route{
+	{ Path: "/", Alias: "Home" },
+	{ Path: "/artists", Alias: "Artists" },
+}
+
 var jsonRoutes string = `
 {
 	"/": {
@@ -175,6 +201,22 @@ var jsonRoutes string = `
 		}
 	},
 
+	"/templates": {
+		"get": {
+			"template": "templates",
+			"items": {
+				"query": {
+					"elements": "select name, raw from templates;"
+				}
+			}
+		},
+		"post": {
+			"query": "update templates set raw = ? where name is ?;",
+			"args": [ "raw", "name" ],
+			"redirect": "/templates"
+		}
+	},
+
 	"/top-words": {
 		"get": {
 			"template": "listing",
@@ -187,7 +229,7 @@ var jsonRoutes string = `
 		},
 		"post": {
 			"query": "update wordcounts set blacklist = 1 where word is ?;",
-			"arg": "elements",
+			"args": [ "elements" ],
 			"redirect": "/top-words"
 		}
 	},
@@ -204,7 +246,7 @@ var jsonRoutes string = `
 		},
 		"post": {
 			"query": "update wordcounts set blacklist = 1 where word is ?;",
-			"arg": "elements",
+			"args": [ "elements" ],
 			"redirect": "/random-words"
 		}
 	},

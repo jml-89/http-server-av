@@ -45,6 +45,12 @@ func initDB(db *sql.DB) error {
 		return err
 	}
 
+	err = initTemplates(db)
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+
 	log.Println("Database initialised")
 
 	return nil
@@ -133,6 +139,56 @@ func addFilesToDB(db *sql.DB, path string) (int, error) {
 	}
 
 	return count, nil
+}
+
+func initTemplates(db *sql.DB) error {
+	_, err := db.Exec("create table if not exists templates (name text primary key, raw text);")
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+	defer tx.Rollback()
+
+	stmtUpdate, err := tx.Prepare("insert or ignore into templates (name, raw) values (?, ?);")
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+	defer stmtUpdate.Close()
+
+	for name, raw := range starterTemplates {
+		_, err = stmtUpdate.Exec(name, raw)
+		if err != nil {
+			log.Println(err)
+			return err
+		}
+	}
+
+	err = tx.Commit()
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+
+	return nil
+}
+
+func getTemplate(db *sql.DB, name string) (string, error) {
+	row := db.QueryRow("select raw from templates where name is ?;", name)
+	var raw string
+	err := row.Scan(&raw)
+	if err != nil {
+		log.Println(err)
+		return raw, err
+	}
+
+	return raw, nil
 }
 
 func cullMissing(db *sql.DB, dir string) error {
@@ -418,7 +474,6 @@ func wordcount(db *sql.DB) error {
 		return err
 	}
 	defer rows.Close()
-
 
 	stmtUpdate, err := tx.Prepare("insert into wordcounts(word) values(?) on conflict(word) do update set num = num + 1;")
 	if err != nil {

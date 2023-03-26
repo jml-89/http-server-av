@@ -20,12 +20,6 @@ import (
 var usage = "servemedia [path]"
 
 func main() {
-	done := make(chan bool)
-	go func() {
-		http.ListenAndServe(":8080", nil)
-		done<- true
-	}()
-	
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 
 	if len(os.Args) > 1 {
@@ -43,12 +37,26 @@ func main() {
 
 	pathDb := "info.db"
 
+	done := make(chan bool)
+	go func() {
+		http.ListenAndServe(":8080", nil)
+		done<- true
+	}()
+
 	log.Printf("Opening database %s\n", pathDb)
 	db, err := sql.Open("sqlite3", pathDb)
 	if err != nil {
 		log.Fatalf("Failed to open %s: %s\n", pathDb, err)
 	}
 	defer db.Close()
+
+	http.Handle("/file/", http.StripPrefix("/file/", http.FileServer(http.Dir(pathMedia))))
+	http.HandleFunc("/tmb/", serveThumbs(db))
+	rs, err := addRoutes(db)
+	if err != nil {
+		log.Fatal(err)
+	}
+	http.HandleFunc("/search", createSearchHandler(db, rs))
 
 	log.Printf("Initialising database...\n");
 	err = initDB(db)
@@ -63,13 +71,11 @@ func main() {
 	}
 	log.Printf("%v files added to database\n", count)
 
-	/*
 	log.Printf("Conducting word count...\n")
 	err = wordcount(db)
 	if err != nil {
 		log.Fatal(err)
 	}
-	*/
 
 	log.Printf("Fixing tags...\n")
 	err = fixtags(db)
@@ -82,15 +88,6 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-
-	http.Handle("/file/", http.StripPrefix("/file/", http.FileServer(http.Dir(pathMedia))))
-	http.HandleFunc("/tmb/", serveThumbs(db))
-	rs, err := addRoutes(db)
-	if err != nil {
-		log.Fatal(err)
-	}
-	http.HandleFunc("/search", createSearchHandler(db, rs))
-	//log.Fatal(http.ListenAndServe(":8080", nil))
 
 	_ = <-done
 

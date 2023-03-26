@@ -35,7 +35,7 @@ type ConfigGet struct {
 
 type ConfigPost struct {
 	Query    string
-	Arg      string
+	Args     []string
 	Redirect string
 }
 
@@ -121,11 +121,12 @@ func serveThumbs(db *sql.DB) func(http.ResponseWriter, *http.Request) {
 }
 
 func addRoutes(db *sql.DB) ([]Route, error) {
-	otherRoutes := make([]Route, 0, 10)
+	otherRoutes := Fastlinks //make([]Route, 0, 10)
 
 	routes := make(map[string]Config)
 	json.Unmarshal([]byte(jsonRoutes), &routes)
 
+	/*
 	for k, _ := range routes {
 		r := Route{Path: k, Alias: ""}
 		if k == "/" {
@@ -135,6 +136,7 @@ func addRoutes(db *sql.DB) ([]Route, error) {
 		}
 		otherRoutes = append(otherRoutes, r)
 	}
+	*/
 
 	for k, cfg := range routes {
 		if cfg.Get != nil {
@@ -241,7 +243,7 @@ func createSearchHandler(db *sql.DB, otherRoutes []Route) func(http.ResponseWrit
 		td["media"] = matches
 		td["count"] = len(matches)
 
-		tmpl, err := loadTemplate("index")
+		tmpl, err := loadTemplate(db, "index")
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -253,9 +255,18 @@ func createSearchHandler(db *sql.DB, otherRoutes []Route) func(http.ResponseWrit
 	}
 }
 
-func loadTemplate(name string) (*template.Template, error) {
-	rawBase := templates["base"]
-	rawTmpl := templates[name]
+func loadTemplate(db *sql.DB, name string) (*template.Template, error) {
+	rawBase, err := getTemplate(db, "base")
+	if err != nil {
+		log.Println(err)
+		return nil, err
+	}
+
+	rawTmpl, err := getTemplate(db, name)
+	if err != nil {
+		log.Println(err)
+		return nil, err
+	}
 
 	tmpl := template.Must(template.New("base").Parse(string(rawBase)))
 	template.Must(tmpl.New("body").Parse(string(rawTmpl)))
@@ -306,13 +317,20 @@ func createPostHandler(db *sql.DB, cfg *ConfigPost) func(http.ResponseWriter, *h
 		stmt, err := tx.Prepare(cfg.Query)
 		defer stmt.Close()
 
-		for _, term := range req.Form[cfg.Arg] {
-			log.Printf("%s :: %s\n", cfg.Query, term)
-			_, err := stmt.Exec(term)
-			if err != nil {
-				log.Println(err)
+		stmtArgs := make([]any, 0, len(cfg.Args))
+		for _, arg := range cfg.Args {
+			xs, ok := req.Form[arg]
+			if !ok {
+				log.Printf("Missing argument: %s\n", arg)
 				return
 			}
+			stmtArgs = append(stmtArgs, xs[0])
+		}
+
+		_, err = stmt.Exec(stmtArgs...)
+		if err != nil {
+			log.Println(err)
+			return
 		}
 
 		err = tx.Commit()
@@ -380,25 +398,58 @@ func createGetHandler(db *sql.DB, cfg *ConfigGet) func(http.ResponseWriter, *htt
 			}
 			defer rows.Close()
 
-			words := make([]string, 0, 50)
+			cols, err := rows.Columns()
+			if err != nil {
+				log.Println(err)
+				return
+			}
+
+			results := make([][]string, 0, 50)
 			for rows.Next() {
-				var word string
-				err = rows.Scan(&word)
+				//result := make([]*string, len(cols), len(cols))
+				result := make([]any, len(cols), len(cols))
+				for i := 0; i < len(cols); i++ {
+					result[i] = new(string)
+				}
+				err = rows.Scan(result...)
 				if err != nil {
 					log.Println(err)
 					return
 				}
-				words = append(words, word)
+				r2 := make([]string, 0, len(cols))
+				for _, field := range result {
+					r2 = append(r2, *field.(*string))
+				}
+				results = append(results, r2)
 			}
 
+			/*
+			for i, row := range results {
+				log.Printf("ROW %d\n", i)
+				for j, field := range row {
+					log.Printf("\t%d :: %s\n", j, field)
+				}
+			}
+			*/
+
 			if k != "media" {
-				td[k] = words
+				// if there's just one field per row, flatten it into a simple 1 dimensional slice
+				// no point incurring even more type diving overhead on the templates
+				if len(cols) == 1 {
+					flatsults := make([]string, 0, len(results))
+					for _, result := range results {
+						flatsults = append(flatsults, result[0])
+					}
+					td[k] = flatsults
+				} else {
+					td[k] = results
+				}
 				continue
 			}
 
-			media := make([]map[string]string, 0, len(words))
-			for _, word := range words {
-				elem, err := getAllTags(db, word)
+			media := make([]map[string]string, 0, len(results))
+			for _, result := range results {
+				elem, err := getAllTags(db, result[0])
 				if err != nil {
 					log.Println(err)
 					return
@@ -408,7 +459,7 @@ func createGetHandler(db *sql.DB, cfg *ConfigGet) func(http.ResponseWriter, *htt
 			td[k] = media
 		}
 
-		tmpl, err := loadTemplate(cfg.Template)
+		tmpl, err := loadTemplate(db, cfg.Template)
 		if err != nil {
 			log.Fatal(err)
 		}
