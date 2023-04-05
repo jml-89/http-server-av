@@ -167,14 +167,8 @@ var starterTemplates = map[string]string{
 		}
 	</style>
 </html>
-`}
-
-var Fastlinks []Route = []Route{
-	{ Path: "/", Alias: "Home" },
-	{ Path: "/artists", Alias: "Artists" },
-}
-
-var jsonRoutes string = `
+`,
+"routes":`
 {
 	"/": {
 		"get": {
@@ -263,4 +257,12 @@ var jsonRoutes string = `
 		}
 	}
 }
-`
+`,
+}
+
+var Fastlinks []Route = []Route{
+	{ Path: "/", Alias: "Home" },
+	{ Path: "/artists", Alias: "Artists" },
+	{ Path: "/templates", Alias: "Templates" },
+}
+

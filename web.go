@@ -123,6 +123,12 @@ func serveThumbs(db *sql.DB) func(http.ResponseWriter, *http.Request) {
 func addRoutes(db *sql.DB) ([]Route, error) {
 	otherRoutes := Fastlinks //make([]Route, 0, 10)
 
+	jsonRoutes, err := getTemplate(db, "routes")
+	if err != nil {
+		log.Println(err)
+		return nil, err
+	}
+
 	routes := make(map[string]Config)
 	json.Unmarshal([]byte(jsonRoutes), &routes)
 

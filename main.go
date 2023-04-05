@@ -50,6 +50,12 @@ func main() {
 	}
 	defer db.Close()
 
+	log.Printf("Initialising database...\n");
+	err = initDB(db)
+	if err != nil {
+		log.Fatalf("Failed to initialise DB tables: %s\n", err)
+	}
+
 	http.Handle("/file/", http.StripPrefix("/file/", http.FileServer(http.Dir(pathMedia))))
 	http.HandleFunc("/tmb/", serveThumbs(db))
 	rs, err := addRoutes(db)
@@ -57,12 +63,6 @@ func main() {
 		log.Fatal(err)
 	}
 	http.HandleFunc("/search", createSearchHandler(db, rs))
-
-	log.Printf("Initialising database...\n");
-	err = initDB(db)
-	if err != nil {
-		log.Fatalf("Failed to initialise DB tables: %s\n", err)
-	}
 
 	log.Printf("Adding media files to database...\n")
 	count, err := addFilesToDB(db, pathMedia)
