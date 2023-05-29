@@ -130,7 +130,11 @@ func addRoutes(db *sql.DB) ([]Route, error) {
 	}
 
 	routes := make(map[string]Config)
-	json.Unmarshal([]byte(jsonRoutes), &routes)
+	err = json.Unmarshal([]byte(jsonRoutes), &routes)
+	if err != nil {
+		log.Println(err)
+		return nil, err
+	}
 
 	/*
 	for k, _ := range routes {

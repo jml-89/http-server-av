@@ -455,7 +455,13 @@ func fixtags(db *sql.DB) error {
 }
 
 func wordcount(db *sql.DB) error {
-	_, err := db.Exec("create table if not exists wordcounts (word text primary key, num integer default 1, blacklist integer default 0);")
+	_, err := db.Exec("drop table wordcounts;")
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+
+	_, err = db.Exec("create table if not exists wordcounts (word text primary key, num integer default 1, blacklist integer default 0);")
 	if err != nil {
 		log.Println(err)
 		return err
@@ -513,3 +519,71 @@ func wordcount(db *sql.DB) error {
 
 	return err
 }
+
+func wordassocs(db *sql.DB) error {
+	_, err := db.Exec("drop table wordassocs;")
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+
+	_, err = db.Exec("create table if not exists wordassocs (filename text, word text);")
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+	defer tx.Rollback()
+
+	rows, err := db.Query("select filename, val from tags;")
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+	defer rows.Close()
+
+	stmtUpdate, err := tx.Prepare("insert into wordassocs (filename, word) values (?, ?);")
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+	defer stmtUpdate.Close()
+
+	for rows.Next() {
+		var filename string
+		var words string
+		err = rows.Scan(&filename, &words)
+		if err != nil {
+			log.Println(err)
+			return err
+		}
+
+		for _, word := range strings.Split(words, " ") {
+			word = strings.Trim(word, " -=_+[]{}()!@#$%^&*<>,./?\"'|\\`~")
+			word = strings.ToLower(word)
+			if len(word) == 0 {
+				continue
+			}
+
+			_, err = stmtUpdate.Exec(filename, word)
+			if err != nil {
+				log.Println(err)
+				return err
+			}
+		}
+	}
+
+	err = tx.Commit()
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+
+	return err
+}
+

@@ -118,6 +118,15 @@ var starterTemplates = map[string]string{
 		</tbody>
 	</table>
 {{end}}
+	<h1>Associations</h1>
+	<ol>{{range $k, $vs := .assoc}}{{with $x := index $vs 1}}
+		<li><a href="/search?terms={{$x}}">{{$x}}</a></li>
+	{{end}}{{end}}</ol>
+
+	<h1>Related Videos</h1>
+	<ol>{{range $k, $vs := .related}}
+		<li><a href="/watch?arg={{index $vs 0}}"><img src="/tmb/{{index $vs 1}}"/></a></li>
+	{{end}}</ol>
 </div>
 `,
 "index":`
@@ -189,7 +198,9 @@ var starterTemplates = map[string]string{
 			"template": "video",
 			"items": {
 				"query": {
-					"media": "select distinct(filename) from tags where filename is ?;"
+					"media": "select distinct(filename) from tags where filename is ?;",
+					"assoc": "select count(*) as c, word from wordassocs where word in (select word from wordassocs where filename is ?) group by word order by c desc limit 20;",
+					"related": "select filename, val from tags where name is 'thumbname' and filename in (select filename from wordassocs where word in (select word from wordcounts where word in (select word from wordassocs where filename is ?) and num > 10 order by num asc limit 10) group by filename order by count(filename) desc limit 10);"
 				}
 			}
 		}

@@ -4,8 +4,6 @@ package main
 // Streaming media
 // TODO#2
 // Javascript player
-// TODO#3
-// Fix memory leak in ffmpeg usage
 
 import (
 	"database/sql"
@@ -71,8 +69,16 @@ func main() {
 	}
 	log.Printf("%v files added to database\n", count)
 
+	/*
 	log.Printf("Conducting word count...\n")
 	err = wordcount(db)
+	if err != nil {
+		log.Fatal(err)
+	}
+	*/
+
+	log.Printf("Conducting word association...\n")
+	err = wordassocs(db)
 	if err != nil {
 		log.Fatal(err)
 	}
