@@ -2,11 +2,11 @@ package main
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	_ "github.com/mattn/go-sqlite3"
 	"log"
-	"net/url"
 	"os"
 	"strings"
 )
@@ -51,7 +51,41 @@ func initDB(db *sql.DB) error {
 		return err
 	}
 
+	err = initRest(db)
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+
 	log.Println("Database initialised")
+
+	return nil
+}
+
+func initRest(db *sql.DB) error {
+	var raw string
+	row := db.QueryRow("select raw from templates where name is 'init';")
+	err := row.Scan(&raw)
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+
+	var statements []string
+	err = json.Unmarshal([]byte(raw), &statements)
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+
+	for _, statement := range statements {
+		log.Println(statement)
+		_, err = db.Exec(statement)
+		if err != nil {
+			log.Println(err)
+			return err
+		}
+	}
 
 	return nil
 }
@@ -113,7 +147,6 @@ func addFilesToDB(db *sql.DB, path string) (int, error) {
 			return count, err
 		}
 		defer stmtMetadata.Close()
-
 
 		_, err = stmtThumb.Exec(thumbname, thumbnail)
 		if err != nil {
@@ -248,7 +281,6 @@ func cullMissing(db *sql.DB, dir string) error {
 		return err
 	}
 
-
 	log.Printf("%d missing media items removed\n", count)
 	return nil
 }
@@ -320,9 +352,10 @@ func getAllTags(db *sql.DB, filename string) (map[string]string, error) {
 		count++
 	}
 
-	res["filenamequery"] = url.QueryEscape(filename)
-	res["filenamepath"] = url.PathEscape(filename)
-	res["thumbname"] = url.PathEscape(res["thumbname"])
+	res["filename"] = filename
+	//res["filenamequery"] = url.QueryEscape(filename)
+	//res["filenamepath"] = url.PathEscape(filename)
+	//res["thumbname"] = url.PathEscape(res["thumbname"])
 
 	return res, nil
 }
@@ -334,17 +367,17 @@ type SearchParameters struct {
 	RandomOrder bool
 }
 
-func lookup2(db *sql.DB, params SearchParameters) ([]map[string]string, error) {
+func lookup2(db *sql.DB, params SearchParameters) ([][]string, error) {
 	rescap := params.Limit
 	if rescap == 0 {
 		rescap = 50
 	}
 
-	res := make([]map[string]string, 0, rescap)
+	res := make([][]string, 0, rescap)
 
 	bricks := make([]string, 0, 20)
-	bricks = append(bricks, "select distinct(filename) from tags")
-	glue := "where"
+	bricks = append(bricks, "select filename, val from tags where name is 'thumbname'")
+	glue := "and"
 	fills := make([]interface{}, 0, 20)
 
 	if len(params.Vals) > 0 {
@@ -386,18 +419,16 @@ func lookup2(db *sql.DB, params SearchParameters) ([]map[string]string, error) {
 	}
 
 	for rows.Next() {
+		cols := make([]string, 0, 2)
+
 		var filename string
-		err = rows.Scan(&filename)
+		var thumbname string
+		err = rows.Scan(&filename, &thumbname)
 		if err != nil {
 			return res, err
 		}
-
-		elem, err := getAllTags(db, filename)
-		if err != nil {
-			return res, err
-		}
-
-		res = append(res, elem)
+		cols = append(cols, filename, thumbname)
+		res = append(res, cols)
 	}
 
 	return res, err
@@ -454,80 +485,33 @@ func fixtags(db *sql.DB) error {
 	return nil
 }
 
-func wordcount(db *sql.DB) error {
-	_, err := db.Exec("drop table wordcounts;")
-	if err != nil {
-		log.Println(err)
-		return err
-	}
+var punctuation = " \r\n\t\"`~()&^%$#@?!{}[]+,.<>/:;|\\="
 
-	_, err = db.Exec("create table if not exists wordcounts (word text primary key, num integer default 1, blacklist integer default 0);")
-	if err != nil {
-		log.Println(err)
-		return err
-	}
+func stringsplat(s, cutset string) []string {
+	res := make([]string, 0, 100)
 
-	tx, err := db.Begin()
-	if err != nil {
-		log.Println(err)
-		return err
-	}
-	defer tx.Rollback()
-
-	rows, err := tx.Query("select val from tags;")
-	if err != nil {
-		log.Println(err)
-		return err
-	}
-	defer rows.Close()
-
-	stmtUpdate, err := tx.Prepare("insert into wordcounts(word) values(?) on conflict(word) do update set num = num + 1;")
-	if err != nil {
-		log.Println(err)
-		return err
-	}
-	defer stmtUpdate.Close()
-
-	for rows.Next() {
-		var words string
-		err = rows.Scan(&words)
-		if err != nil {
-			log.Println(err)
-			return err
-		}
-
-		for _, word := range strings.Split(words, " ") {
-			word = strings.Trim(word, "-=_+[]{}()!@#$%^&*<>,./?\"'|\\`~")
-			word = strings.ToLower(word)
-			if len(word) == 0 {
-				continue
+	var b strings.Builder
+	for _, c := range s {
+		if strings.ContainsRune(cutset, c) {
+			if b.Len() > 0 {
+				res = append(res, b.String())
+				b.Reset()
 			}
-
-			_, err = stmtUpdate.Exec(word)
-			if err != nil {
-				log.Println(err)
-				return err
-			}
+		} else {
+			b.WriteRune(c)
 		}
 	}
 
-	err = tx.Commit()
-	if err != nil {
-		log.Println(err)
-		return err
+	if b.Len() > 0 {
+		res = append(res, b.String())
+		b.Reset()
 	}
 
-	return err
+	return res
 }
 
 func wordassocs(db *sql.DB) error {
-	_, err := db.Exec("drop table wordassocs;")
-	if err != nil {
-		log.Println(err)
-		return err
-	}
-
-	_, err = db.Exec("create table if not exists wordassocs (filename text, word text);")
+	_, err := db.Exec("create table if not exists wordassocs (filename text, word text, primary key(filename, word) on conflict ignore);")
 	if err != nil {
 		log.Println(err)
 		return err
@@ -540,7 +524,7 @@ func wordassocs(db *sql.DB) error {
 	}
 	defer tx.Rollback()
 
-	rows, err := db.Query("select filename, val from tags;")
+	rows, err := db.Query("select filename, val from tags where filename not in (select distinct(filename) from wordassocs);")
 	if err != nil {
 		log.Println(err)
 		return err
@@ -563,12 +547,8 @@ func wordassocs(db *sql.DB) error {
 			return err
 		}
 
-		for _, word := range strings.Split(words, " ") {
-			word = strings.Trim(word, " -=_+[]{}()!@#$%^&*<>,./?\"'|\\`~")
+		for _, word := range stringsplat(words, punctuation) {
 			word = strings.ToLower(word)
-			if len(word) == 0 {
-				continue
-			}
 
 			_, err = stmtUpdate.Exec(filename, word)
 			if err != nil {
@@ -587,3 +567,74 @@ func wordassocs(db *sql.DB) error {
 	return err
 }
 
+func parseSearchTerms(formterms []string) SearchParameters {
+	terms := make([]string, 0, 50)
+	for _, term := range formterms {
+		inQuotes := false
+		lo := 0
+		i := 0
+		for _, c := range term {
+			if inQuotes {
+				if c == '"' {
+					if i > lo {
+						terms = append(terms, term[lo:i])
+					}
+					lo = i + 1
+					inQuotes = false
+				}
+			} else if c == '"' {
+				if i > lo {
+					terms = append(terms, term[lo:i])
+				}
+				inQuotes = true
+				lo = i + 1
+			} else if c == ' ' {
+				if i > lo {
+					terms = append(terms, term[lo:i])
+				}
+				lo = i + 1
+			} else if c == ':' {
+				if i > lo {
+					terms = append(terms, term[lo:i+1])
+				}
+				lo = i + 1
+			}
+			i++
+		}
+
+		if i > lo {
+			terms = append(terms, term[lo:i])
+		}
+	}
+
+	log.Printf("Terms:\n")
+	for _, term := range terms {
+		log.Printf("\t%s\n", term)
+	}
+
+	params := SearchParameters{
+		Vals:        make([]string, 0, 50),
+		KeyVals:     make(map[string]string),
+		RandomOrder: true,
+		Limit:       50,
+	}
+
+	skip := false
+	for i, term := range terms {
+		if skip {
+			skip = false
+			continue
+		}
+
+		if strings.Contains(term, ":") {
+			if len(terms) > i+1 {
+				params.KeyVals[term[:len(term)-1]] = terms[i+1]
+				skip = true
+			}
+		} else {
+			params.Vals = append(params.Vals, term)
+		}
+	}
+
+	return params
+}

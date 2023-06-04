@@ -39,48 +39,6 @@ type ConfigPost struct {
 	Redirect string
 }
 
-func serveVideo(db *sql.DB) func(http.ResponseWriter, *http.Request) {
-	return func(w http.ResponseWriter, r *http.Request) {
-		filename := r.URL.Path[len("/watch/"):]
-
-		tx, err := db.Begin()
-		if err != nil {
-			log.Println(err)
-			return
-		}
-		defer tx.Rollback()
-
-		stmt, err := tx.Prepare("SELECT name, value FROM tags WHERE filename is ?;")
-		if err != nil {
-			log.Println(err)
-			return
-		}
-
-		rows, err := stmt.Query(filename)
-		if err != nil {
-			log.Println(err)
-			return
-		}
-
-		tags := make(map[string]string)
-		for rows.Next() {
-			var k, v string
-			err = rows.Scan(&k, &v)
-			if err != nil {
-				log.Println(err)
-				return
-			}
-			tags[k] = v
-		}
-
-		err = tx.Commit()
-		if err != nil {
-			log.Println(err)
-			return
-		}
-	}
-}
-
 func serveThumbs(db *sql.DB) func(http.ResponseWriter, *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		filename := r.URL.Path[5:]
@@ -136,18 +94,6 @@ func addRoutes(db *sql.DB) ([]Route, error) {
 		return nil, err
 	}
 
-	/*
-	for k, _ := range routes {
-		r := Route{Path: k, Alias: ""}
-		if k == "/" {
-			r.Alias = "home"
-		} else {
-			r.Alias = k[1:]
-		}
-		otherRoutes = append(otherRoutes, r)
-	}
-	*/
-
 	for k, cfg := range routes {
 		if cfg.Get != nil {
 			cfg.Get.Items.Routes = otherRoutes
@@ -175,83 +121,16 @@ func createSearchHandler(db *sql.DB, otherRoutes []Route) func(http.ResponseWrit
 			log.Fatal(err)
 		}
 
-		terms := make([]string, 0, 50)
-		for _, term := range req.Form["terms"] {
-			inQuotes := false
-			lo := 0
-			i := 0
-			for _, c := range term {
-				if inQuotes {
-					if c == '"' {
-						if i > lo {
-							terms = append(terms, term[lo:i])
-						}
-						lo = i+1
-						inQuotes = false
-					}
-				} else if c == '"' {
-					if i > lo {
-						terms = append(terms, term[lo:i])
-					}
-					inQuotes = true
-					lo = i+1
-				} else if c == ' ' {
-					if i > lo {
-						terms = append(terms, term[lo:i])
-					}
-					lo = i+1
-				} else if c == ':' {
-					if i > lo {
-						terms = append(terms, term[lo:i+1])
-					}
-					lo = i+1
-				}
-				i++
-			}
-
-			if i > lo {
-				terms = append(terms, term[lo:i])
-			}
-		}
-
-		log.Printf("Terms:\n")
-		for _, term := range terms {
-			log.Printf("\t%s\n", term)
-		}
-
-		td["terms"] = terms
-		td["routes"] = otherRoutes
-
-		params := SearchParameters{
-			Vals:        make([]string, 0, 50),
-			KeyVals:     make(map[string]string),
-			RandomOrder: true,
-			Limit:       50,
-		}
-
-		skip := false
-		for i, term := range terms {
-			if skip {
-				skip = false
-				continue
-			}
-
-			if strings.Contains(term, ":") {
-				if len(terms) > i+1 {
-					params.KeyVals[term[:len(term)-1]] = terms[i+1]
-					skip = true
-				}
-			} else {
-				params.Vals = append(params.Vals, term)
-			}
-		}
-
+		params := parseSearchTerms(req.Form["terms"])
 		matches, err := lookup2(db, params)
 		if err != nil {
 			log.Fatal(err)
 		}
-		td["media"] = matches
+
+		td["videos"] = matches
 		td["count"] = len(matches)
+		td["terms"] = strings.Join(req.Form["terms"], " ")
+		td["routes"] = otherRoutes
 
 		tmpl, err := loadTemplate(db, "index")
 		if err != nil {
@@ -278,8 +157,13 @@ func loadTemplate(db *sql.DB, name string) (*template.Template, error) {
 		return nil, err
 	}
 
+	fns := make(map[string]any)
+	// I've had mixed luck with html/template library escaping of UTF-8 strings for URL querystrings
+	// Can be addressed by explicitly using the pertinent functions
+	fns["escapequery"] = template.URLQueryEscaper
+	fns["escapepath"] = url.PathEscape
 	tmpl := template.Must(template.New("base").Parse(string(rawBase)))
-	template.Must(tmpl.New("body").Parse(string(rawTmpl)))
+	template.Must(tmpl.New("body").Funcs(fns).Parse(string(rawTmpl)))
 
 	return tmpl, nil
 }
@@ -317,6 +201,13 @@ func createPostHandler(db *sql.DB, cfg *ConfigPost) func(http.ResponseWriter, *h
 			return
 		}
 
+		stmtArgs := make([]any, 0, len(cfg.Args))
+		for k, vs := range req.Form {
+			v := vs[0]
+			//log.Printf("\t'%s':'%s'", k, v)
+			stmtArgs = append(stmtArgs, sql.Named(k, v))
+		}
+
 		tx, err := db.Begin()
 		if err != nil {
 			log.Println(err)
@@ -327,16 +218,7 @@ func createPostHandler(db *sql.DB, cfg *ConfigPost) func(http.ResponseWriter, *h
 		stmt, err := tx.Prepare(cfg.Query)
 		defer stmt.Close()
 
-		stmtArgs := make([]any, 0, len(cfg.Args))
-		for _, arg := range cfg.Args {
-			xs, ok := req.Form[arg]
-			if !ok {
-				log.Printf("Missing argument: %s\n", arg)
-				return
-			}
-			stmtArgs = append(stmtArgs, xs[0])
-		}
-
+		//log.Printf("\t%s :: %v", cfg.Query, stmtArgs)
 		_, err = stmt.Exec(stmtArgs...)
 		if err != nil {
 			log.Println(err)
@@ -349,11 +231,11 @@ func createPostHandler(db *sql.DB, cfg *ConfigPost) func(http.ResponseWriter, *h
 			return
 		}
 
-
 		redir := cfg.Redirect
 		if redir == "" {
 			redir = req.URL.Path
 		}
+
 		http.Redirect(w, req, redir, http.StatusFound)
 	}
 }
@@ -373,14 +255,14 @@ func createGetHandler(db *sql.DB, cfg *ConfigGet) func(http.ResponseWriter, *htt
 		}
 
 		args := make([]any, 0, 10)
-		for _, v := range req.Form["arg"] {
-			v, err = url.QueryUnescape(v)
+		for k, vs := range req.Form {
+			v, err := url.QueryUnescape(vs[0])
 			if err != nil {
 				log.Println(err)
 				return
 			}
-			log.Printf("Argument: '%v'\n", v)
-			args = append(args, v)
+			//log.Printf("\t'%s':'%v'\n", k, v)
+			args = append(args, sql.Named(k, v))
 		}
 
 		td := make(map[string]interface{})
@@ -416,7 +298,6 @@ func createGetHandler(db *sql.DB, cfg *ConfigGet) func(http.ResponseWriter, *htt
 
 			results := make([][]string, 0, 50)
 			for rows.Next() {
-				//result := make([]*string, len(cols), len(cols))
 				result := make([]any, len(cols), len(cols))
 				for i := 0; i < len(cols); i++ {
 					result[i] = new(string)
@@ -433,40 +314,18 @@ func createGetHandler(db *sql.DB, cfg *ConfigGet) func(http.ResponseWriter, *htt
 				results = append(results, r2)
 			}
 
-			/*
-			for i, row := range results {
-				log.Printf("ROW %d\n", i)
-				for j, field := range row {
-					log.Printf("\t%d :: %s\n", j, field)
+			// if there's just one field per row, flatten it into a simple 1 dimensional slice
+			// no point incurring even more type diving overhead on the templates
+			if len(cols) == 1 {
+				flatsults := make([]string, 0, len(results))
+				for _, result := range results {
+					flatsults = append(flatsults, result[0])
 				}
-			}
-			*/
-
-			if k != "media" {
-				// if there's just one field per row, flatten it into a simple 1 dimensional slice
-				// no point incurring even more type diving overhead on the templates
-				if len(cols) == 1 {
-					flatsults := make([]string, 0, len(results))
-					for _, result := range results {
-						flatsults = append(flatsults, result[0])
-					}
-					td[k] = flatsults
-				} else {
-					td[k] = results
-				}
-				continue
+				td[k] = flatsults
+			} else {
+				td[k] = results
 			}
 
-			media := make([]map[string]string, 0, len(results))
-			for _, result := range results {
-				elem, err := getAllTags(db, result[0])
-				if err != nil {
-					log.Println(err)
-					return
-				}
-				media = append(media, elem)
-			}
-			td[k] = media
 		}
 
 		tmpl, err := loadTemplate(db, cfg.Template)
@@ -480,4 +339,3 @@ func createGetHandler(db *sql.DB, cfg *ConfigGet) func(http.ResponseWriter, *htt
 		}
 	}
 }
-

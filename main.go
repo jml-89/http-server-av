@@ -38,7 +38,7 @@ func main() {
 	done := make(chan bool)
 	go func() {
 		http.ListenAndServe(":8080", nil)
-		done<- true
+		done <- true
 	}()
 
 	log.Printf("Opening database %s\n", pathDb)
@@ -48,7 +48,7 @@ func main() {
 	}
 	defer db.Close()
 
-	log.Printf("Initialising database...\n");
+	log.Printf("Initialising database...\n")
 	err = initDB(db)
 	if err != nil {
 		log.Fatalf("Failed to initialise DB tables: %s\n", err)
@@ -68,14 +68,6 @@ func main() {
 		log.Fatal(err)
 	}
 	log.Printf("%v files added to database\n", count)
-
-	/*
-	log.Printf("Conducting word count...\n")
-	err = wordcount(db)
-	if err != nil {
-		log.Fatal(err)
-	}
-	*/
 
 	log.Printf("Conducting word association...\n")
 	err = wordassocs(db)
@@ -129,4 +121,3 @@ func recls(dir string) ([]string, error) {
 
 	return files, err
 }
-

@@ -72,7 +72,7 @@ var starterTemplates = map[string]string{
 			</div>
 
 			<form id="search-area" action="search" method="get">
-				<input type="text" name="terms" id="search-terms" value="{{range .terms}}{{.}} {{end}}" required>
+				<input type="text" name="terms" id="search-terms" value="{{.terms}}" required>
 				<input type="submit" value="Search">
 			</form>
 		</div>
@@ -80,7 +80,7 @@ var starterTemplates = map[string]string{
 	</body>
 </html>
 `,
-"templates":`
+	"templates": `
 <div class="templates">
 {{range $idx, $elem := .elements}}
 	<form id="form-{{index $elem 0}}" action="templates" method="post">
@@ -92,67 +92,78 @@ var starterTemplates = map[string]string{
 {{end}}
 </div>
 `,
-"video":`
+	"video": `
 <div>
-{{range $idx, $elem := .media}}
 	<video controls>
-		<source src="/file/{{$elem.filenamepath}}">
-		<a href="/file/{{$elem.filenamepath}}">Download</a>
+		<source src="/file/{{index .filename 0 | escapepath}}">
+		<a href="/file/{{index .filename 0 | escapepath}}">Download</a>
 	</video>
+
 	<div id="video-description">
-		<h1>{{$elem.title}}</h1>
-		<h2>Created by <a href="/search?terms=artist:&quot;{{$elem.artist}}&quot;">{{$elem.artist}}</a></h2>
-		<h3>Uploaded on {{$elem.date}}</h3>
-		<pre>{{$elem.description}}</pre>
+		<h1>{{if .title}}{{index .title 0}}{{else}}{{index .filename 0}}{{end}}</h1>
+		{{if .artist}}<h2>Created by <a href="/search?terms=artist:&quot;{{index .artist 0 }}&quot;">{{index .artist 0}}</a></h2>{{end}}
 	</div>
+
+	{{if .favourite}}
+	<form id="remove-from-favourites" action="/favourites/remove" method="post">
+		<input type="hidden" name="filename" value="{{.filename}}">
+		<input type="submit" value="Remove from Favourites">
+	</form>
+	{{else}}
+	<form id="add-to-favourites" action="/favourites/add" method="post">
+		<input type="hidden" name="filename" value="{{.filename}}">
+		<input type="submit" value="Add to Favourites">
+	</form>
+	{{end}}
+
 
 	<h1>Metadata</h1>
 	<table>
 		<tbody>
-		{{range $k, $v := $elem}}
+		{{range $k, $pair := .tags}}
 			<tr>
-				<td><a href="/search?terms={{$k}}:&quot;{{$v}}&quot;">{{$k}}</a></td>
-				<td>{{$v}}</td>
+				<td><a href="/search?terms={{index $pair 0}}:&quot;{{index $pair 1}}&quot;">{{index $pair 0}}</a></td>
+				<td>{{index $pair 1}}</td>
 			</tr>
 		{{end}}
 		</tbody>
 	</table>
-{{end}}
+
 	<h1>Associations</h1>
 	<ol>{{range $k, $vs := .assoc}}{{with $x := index $vs 1}}
-		<li><a href="/search?terms={{$x}}">{{$x}}</a></li>
+		<li><a href="/search?terms={{$x | escapequery}}">{{$x}}</a></li>
 	{{end}}{{end}}</ol>
 
 	<h1>Related Videos</h1>
 	<ol>{{range $k, $vs := .related}}
-		<li><a href="/watch?arg={{index $vs 0}}"><img src="/tmb/{{index $vs 1}}"/></a></li>
+		<li><a href="/watch?filename={{index $vs 0 | escapequery}}"><img src="/tmb/{{index $vs 1 | escapepath}}"/><h2>{{index $vs 0}}</h2></a></li>
 	{{end}}</ol>
 </div>
 `,
-"index":`
+	"index": `
 <div id="thumbs">
-{{range $idx, $elem := .media}}
+{{range $idx, $elem := .videos}}
 	<div class="media-item">
-		<a href="/watch?arg={{$elem.filenamequery}}"><img src="/tmb/{{$elem.thumbname}}"/></a>
-		<a href="/watch?arg={{$elem.filenamequery}}"><h2>{{$elem.diskfilename}}</h2></a>
+		<a href="/watch?filename={{index $elem 0 | escapequery}}"><img src="/tmb/{{index $elem 1 | escapepath}}"/>
+		<h2>{{index $elem 0}}</h2></a>
 	</div>
 {{end}}
 </div>
 `,
-"listing":`
+	"listing": `
 <form action="{{.path}}" method="post">
 <ol>
 	{{range $idx, $elem := .elements}}
 	<li>
 		<input type="checkbox" name="elements" value="{{.}}">
-		<a href="/search?terms={{.}}">{{.}}</a>
+		<a href="/search?terms={{. | escapequery}}">{{.}}</a>
 	</li>
 	{{end}}
 </ol>
 <button type="submit">Remove</button>
 </form>
 `,
-"single":`
+	"single": `
 <html>
 	<head>
 		<title>{{.}}</title>
@@ -160,7 +171,7 @@ var starterTemplates = map[string]string{
 	<body>
 		<h1>{{.}}</h1>
 		<video controls>
-			<source src="/file/{{.}}"/>
+			<source src="/file/{{. | escapepath}}"/>
 		</video>
 	</body>
 
@@ -177,7 +188,12 @@ var starterTemplates = map[string]string{
 	</style>
 </html>
 `,
-"routes":`
+	"init": `
+[
+	"create table if not exists favourites (filename text, primary key (filename));"
+]
+`,
+	"routes": `
 {
 	"/": {
 		"get": {
@@ -187,9 +203,34 @@ var starterTemplates = map[string]string{
 					"count": "50"
 				},
 				"query": {
-					"media": "select distinct(filename) from tags where name is 'diskfiletime' order by val desc limit 50;"
+					"videos": "select a.filename, b.val from tags a join tags b on a.filename = b.filename where a.name is 'diskfiletime' and b.name is 'thumbname' order by a.val desc limit 50;" 
 				}
 			}
+		}
+	},
+
+	"/favourites/": {
+		"get": {
+			"template": "index",
+			"items": {
+				"query": {
+					"videos": "select a.filename, a.val from favourites b join tags a on a.filename = b.filename where a.name is 'thumbname';"
+				}
+			}
+		}
+	},
+
+	"/favourites/add": {
+		"post": {
+			"query": "insert or ignore into favourites (filename) values (:filename);",
+			"redirect": "/favourites/"
+		}
+	},
+
+	"/favourites/remove": {
+		"post": {
+			"query": "delete from favourites where filename is :filename;",
+			"redirect": "/favourites/"
 		}
 	},
 
@@ -198,15 +239,19 @@ var starterTemplates = map[string]string{
 			"template": "video",
 			"items": {
 				"query": {
-					"media": "select distinct(filename) from tags where filename is ?;",
-					"assoc": "select count(*) as c, word from wordassocs where word in (select word from wordassocs where filename is ?) group by word order by c desc limit 20;",
-					"related": "select filename, val from tags where name is 'thumbname' and filename in (select filename from wordassocs where word in (select word from wordcounts where word in (select word from wordassocs where filename is ?) and num > 10 order by num asc limit 10) group by filename order by count(filename) desc limit 10);"
+					"filename": "select distinct(filename) from tags where filename is :filename;",
+					"title": "select val from tags where filename is :filename and name is 'title';",
+					"artist": "select val from tags where filename is :filename and name is 'artist';",
+					"tags": "select name, val from tags where filename is :filename;",
+					"assoc": "select count(*) as num, word from wordassocs where word in (select word from wordassocs where filename is :filename) group by word having num > 10 order by num asc limit 20;",
+					"related": "select filename, val from tags where name is 'thumbname' and filename in (select filename from wordassocs where word in (select word from wordassocs where word in (select word from wordassocs where filename is :filename) group by word having count(*) > 10 order by count(*) asc limit 20) group by filename order by count(filename) desc limit 10);",
+					"favourite": "select filename from favourites where filename is :filename;"
 				}
 			}
 		}
 	},
 
-	"/templates": {
+	"/templates/": {
 		"get": {
 			"template": "templates",
 			"items": {
@@ -216,55 +261,8 @@ var starterTemplates = map[string]string{
 			}
 		},
 		"post": {
-			"query": "update templates set raw = ? where name is ?;",
-			"args": [ "raw", "name" ],
-			"redirect": "/templates"
-		}
-	},
-
-	"/top-words": {
-		"get": {
-			"template": "listing",
-			"items": {
-				"constant": {},
-				"query": {
-					"elements": "select word from wordcounts where blacklist = 0 order by num desc limit 50;"
-				}
-			}
-		},
-		"post": {
-			"query": "update wordcounts set blacklist = 1 where word is ?;",
-			"args": [ "elements" ],
-			"redirect": "/top-words"
-		}
-	},
-
-	"/random-words": {
-		"get": {
-			"template": "listing",
-			"items": {
-				"constant": {},
-				"query": {
-					"elements": "select word from wordcounts where num > 10 and blacklist = 0 order by random() limit 50;"
-				}
-			}
-		},
-		"post": {
-			"query": "update wordcounts set blacklist = 1 where word is ?;",
-			"args": [ "elements" ],
-			"redirect": "/random-words"
-		}
-	},
-
-	"/artists": {
-		"get": {
-			"template": "listing",
-			"items": {
-				"constant": {},
-				"query": {
-					"elements": "select distinct(val) from tags where name is 'artist' order by random();"
-				}
-			}
+			"query": "update templates set raw = :raw where name is :name;",
+			"redirect": "/templates/"
 		}
 	}
 }
@@ -272,8 +270,7 @@ var starterTemplates = map[string]string{
 }
 
 var Fastlinks []Route = []Route{
-	{ Path: "/", Alias: "Home" },
-	{ Path: "/artists", Alias: "Artists" },
-	{ Path: "/templates", Alias: "Templates" },
+	{Path: "/", Alias: "Home"},
+	{Path: "/favourites/", Alias: "Favourites"},
+	{Path: "/templates/", Alias: "Templates"},
 }
-

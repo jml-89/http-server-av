@@ -33,12 +33,12 @@ AVStream *get_nth_stream(AVFormatContext *fmt_ctx, uint i) {
 import "C"
 
 import (
-	"os"
-	"io"
-	"unsafe"
-	"log"
-	"fmt"
 	"errors"
+	"fmt"
+	"io"
+	"log"
+	"os"
+	"unsafe"
 )
 
 func Say() {
@@ -46,7 +46,6 @@ func Say() {
 	defer C.free(unsafe.Pointer(s))
 	C.puts(s)
 }
-
 
 func GetMetadata(path string) (map[string]string, error) {
 	res := make(map[string]string)
@@ -66,7 +65,7 @@ func GetMetadata(path string) (map[string]string, error) {
 	defer C.free(unsafe.Pointer(blank))
 
 	var tag *C.AVDictionaryEntry = nil
-	for true { 
+	for true {
 		tag = C.av_dict_get(avctx.metadata, blank, tag, C.AV_DICT_IGNORE_SUFFIX)
 		if tag == nil {
 			break
@@ -158,7 +157,6 @@ func CreateEncoderWEBP(dctx *C.AVCodecContext, pathOut string) (*C.AVFormatConte
 
 	return octx, ectx, nil
 }
-
 
 func CreateEncoderJPG(dctx *C.AVCodecContext, pathOut string) (*C.AVFormatContext, *C.AVCodecContext, error) {
 	var octx *C.AVFormatContext = nil
@@ -277,7 +275,7 @@ func InitFilters(ctxEnc, ctxDec *C.AVCodecContext) (*C.AVFilterGraph, *C.AVFilte
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	
+
 	err = avop(C.avfilter_graph_create_filter(&ctxSnk, snk, argOut, nil, nil, graph))
 	if err != nil {
 		return nil, nil, nil, err
@@ -287,7 +285,7 @@ func InitFilters(ctxEnc, ctxDec *C.AVCodecContext) (*C.AVFilterGraph, *C.AVFilte
 	defer C.free(unsafe.Pointer(argFmts))
 
 	err = avop(C.av_opt_set_bin(
-		unsafe.Pointer(ctxSnk), argFmts, 
+		unsafe.Pointer(ctxSnk), argFmts,
 		(*C.uint8_t)(unsafe.Pointer(&ctxEnc.pix_fmt)), C.sizeof_int,
 		C.AV_OPT_SEARCH_CHILDREN))
 	if err != nil {
@@ -370,7 +368,6 @@ func CreateThumbnail(pathIn string) ([]byte, error) {
 	return b, err
 }
 
-
 func CreateThumbnailX(pathIn string, seek bool) ([]byte, error) {
 	//return nil, errors.New("This is a test")
 
@@ -380,7 +377,7 @@ func CreateThumbnailX(pathIn string, seek bool) ([]byte, error) {
 
 	err := avop(C.avformat_open_input(&ctxFmtIn, pathInArg, nil, nil))
 	if err != nil {
-		// if it fails here, it's because the file wasn't a media file 
+		// if it fails here, it's because the file wasn't a media file
 		return nil, err
 	}
 	defer C.avformat_close_input(&ctxFmtIn)
@@ -466,10 +463,10 @@ func CreateThumbnailX(pathIn string, seek bool) ([]byte, error) {
 		}
 
 		rc := C.avcodec_receive_frame(ctxDec, frame)
-			// should be C.AVERROR(C.EAGAIN) but doesn't work
-			// AVERROR definition in error.h is
-			// #define AVERROR(e) (-(e))
-			// so just negative of EAGAIN to check
+		// should be C.AVERROR(C.EAGAIN) but doesn't work
+		// AVERROR definition in error.h is
+		// #define AVERROR(e) (-(e))
+		// so just negative of EAGAIN to check
 		if rc == -C.EAGAIN {
 			C.av_packet_unref(pktDec)
 			continue
@@ -557,4 +554,3 @@ func avop(rc C.int) error {
 	C.av_make_error_string(errbuf, errbuf_len, rc)
 	return errors.New(C.GoString(errbuf))
 }
-
