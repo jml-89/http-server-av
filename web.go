@@ -204,7 +204,6 @@ func createPostHandler(db *sql.DB, cfg *ConfigPost) func(http.ResponseWriter, *h
 		stmtArgs := make([]any, 0, len(cfg.Args))
 		for k, vs := range req.Form {
 			v := vs[0]
-			//log.Printf("\t'%s':'%s'", k, v)
 			stmtArgs = append(stmtArgs, sql.Named(k, v))
 		}
 
@@ -218,7 +217,7 @@ func createPostHandler(db *sql.DB, cfg *ConfigPost) func(http.ResponseWriter, *h
 		stmt, err := tx.Prepare(cfg.Query)
 		defer stmt.Close()
 
-		//log.Printf("\t%s :: %v", cfg.Query, stmtArgs)
+		log.Printf("\t%s :: %v", cfg.Query, stmtArgs)
 		_, err = stmt.Exec(stmtArgs...)
 		if err != nil {
 			log.Println(err)

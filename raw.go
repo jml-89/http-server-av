@@ -71,7 +71,7 @@ var starterTemplates = map[string]string{
 				{{end}}
 			</div>
 
-			<form id="search-area" action="search" method="get">
+			<form id="search-area" action="/search" method="get">
 				<input type="text" name="terms" id="search-terms" value="{{.terms}}" required>
 				<input type="submit" value="Search">
 			</form>
@@ -106,12 +106,12 @@ var starterTemplates = map[string]string{
 
 	{{if .favourite}}
 	<form id="remove-from-favourites" action="/favourites/remove" method="post">
-		<input type="hidden" name="filename" value="{{.filename}}">
+		<input type="hidden" name="filename" value="{{index .filename 0}}">
 		<input type="submit" value="Remove from Favourites">
 	</form>
 	{{else}}
 	<form id="add-to-favourites" action="/favourites/add" method="post">
-		<input type="hidden" name="filename" value="{{.filename}}">
+		<input type="hidden" name="filename" value="{{index .filename 0}}">
 		<input type="submit" value="Add to Favourites">
 	</form>
 	{{end}}
@@ -128,11 +128,6 @@ var starterTemplates = map[string]string{
 		{{end}}
 		</tbody>
 	</table>
-
-	<h1>Associations</h1>
-	<ol>{{range $k, $vs := .assoc}}{{with $x := index $vs 1}}
-		<li><a href="/search?terms={{$x | escapequery}}">{{$x}}</a></li>
-	{{end}}{{end}}</ol>
 
 	<h1>Related Videos</h1>
 	<ol>{{range $k, $vs := .related}}
@@ -243,8 +238,7 @@ var starterTemplates = map[string]string{
 					"title": "select val from tags where filename is :filename and name is 'title';",
 					"artist": "select val from tags where filename is :filename and name is 'artist';",
 					"tags": "select name, val from tags where filename is :filename;",
-					"assoc": "select count(*) as num, word from wordassocs where word in (select word from wordassocs where filename is :filename) group by word having num > 10 order by num asc limit 20;",
-					"related": "select filename, val from tags where name is 'thumbname' and filename in (select filename from wordassocs where word in (select word from wordassocs where word in (select word from wordassocs where filename is :filename) group by word having count(*) > 10 order by count(*) asc limit 20) group by filename order by count(filename) desc limit 10);",
+					"related": "select filename, val from tags where name is 'thumbname' and filename in (select filename from wordassocs a where a.word in (select word from wordassocs where filename is :filename) group by a.filename order by (count(a.filename) * 100) / (select count(*) from wordassocs where filename is a.filename) desc limit 10);",
 					"favourite": "select filename from favourites where filename is :filename;"
 				}
 			}

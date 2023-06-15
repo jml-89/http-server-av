@@ -39,6 +39,19 @@ func initDB(db *sql.DB) error {
 		return err
 	}
 
+	_, err = tx.Exec("CREATE TABLE IF NOT EXISTS checked (filename text, PRIMARY KEY(filename));")
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+
+	_, err = tx.Exec("insert or ignore into checked (filename) select filename from tags where name is 'diskfilename';")
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+
+
 	err = tx.Commit()
 	if err != nil {
 		log.Println(err)
@@ -108,6 +121,11 @@ func addFilesToDB(db *sql.DB, path string) (int, error) {
 	log.Printf("%v candidates valid\n", len(filenames))
 
 	for _, filename := range filenames {
+		_, err = db.Exec("insert into checked (filename) values (?);", filename)
+		if err != nil {
+			continue
+		}
+
 		// Assume any failed thumbnail gen means it wasn't a media file
 		// what about audio? audio is skipped
 		thumbnail, err := CreateThumbnail(filename)
@@ -288,7 +306,7 @@ func cullMissing(db *sql.DB, dir string) error {
 func differenceFilesDB(db *sql.DB, filenames []string) ([]string, error) {
 	newFiles := make([]string, 0, len(filenames))
 
-	rows, err := db.Query("select filename from tags where name is 'diskfilename';")
+	rows, err := db.Query("select filename from checked;")
 	if err != nil {
 		log.Println(err)
 		return newFiles, err
@@ -485,7 +503,7 @@ func fixtags(db *sql.DB) error {
 	return nil
 }
 
-var punctuation = " \r\n\t\"`~()&^%$#@?!{}[]+,.<>/:;|\\="
+var punctuation = " \r\n\t\"`~()[]{}<>&^%$#@?!+-=_,.:;|/\\*"
 
 func stringsplat(s, cutset string) []string {
 	res := make([]string, 0, 100)
