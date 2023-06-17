@@ -45,6 +45,9 @@ func initDB(db *sql.DB) error {
 		return err
 	}
 
+	// Only really necessary when checked table was introduced
+	// Now everything gets added to checked correctly already
+	// So this is redundant
 	_, err = tx.Exec("insert or ignore into checked (filename) select filename from tags where name is 'diskfilename';")
 	if err != nil {
 		log.Println(err)
@@ -76,9 +79,7 @@ func initDB(db *sql.DB) error {
 }
 
 func initRest(db *sql.DB) error {
-	var raw string
-	row := db.QueryRow("select raw from templates where name is 'init';")
-	err := row.Scan(&raw)
+	raw, err := getTemplate(db, "init")
 	if err != nil {
 		log.Println(err)
 		return err
@@ -193,7 +194,7 @@ func addFilesToDB(db *sql.DB, path string) (int, error) {
 }
 
 func initTemplates(db *sql.DB) error {
-	_, err := db.Exec("create table if not exists templates (name text primary key, raw text);")
+	_, err := db.Exec("create table if not exists templates (previous integer, name text, raw text, primary key (previous, name));")
 	if err != nil {
 		log.Println(err)
 		return err
@@ -206,7 +207,7 @@ func initTemplates(db *sql.DB) error {
 	}
 	defer tx.Rollback()
 
-	stmtUpdate, err := tx.Prepare("insert or ignore into templates (name, raw) values (?, ?);")
+	stmtUpdate, err := tx.Prepare("insert or ignore into templates (name, raw, previous) values (?, ?, 0);")
 	if err != nil {
 		log.Println(err)
 		return err
@@ -231,7 +232,14 @@ func initTemplates(db *sql.DB) error {
 }
 
 func getTemplate(db *sql.DB, name string) (string, error) {
-	row := db.QueryRow("select raw from templates where name is ?;", name)
+	row := db.QueryRow(`
+		select raw 
+		from templates 
+		where name is :name and not rowid in (
+			select previous
+			from templates
+			where name is :name 
+		);`, sql.Named("name", name))
 	var raw string
 	err := row.Scan(&raw)
 	if err != nil {

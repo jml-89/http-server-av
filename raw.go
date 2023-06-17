@@ -87,6 +87,7 @@ var starterTemplates = map[string]string{
 		<h2>{{index $elem 0}}</h2>
 		<textarea name="raw">{{index $elem 1}}</textarea>
 		<input type="hidden" name="name" value="{{index $elem 0}}">
+		<input type="hidden" name="previous" value="{{index $elem 2}}">
 		<input type="submit" value="Update">
 	</form>
 {{end}}
@@ -250,12 +251,12 @@ var starterTemplates = map[string]string{
 			"template": "templates",
 			"items": {
 				"query": {
-					"elements": "select name, raw from templates;"
+					"elements": "select name, raw, rowid from templates where rowid not in (select previous from templates);"
 				}
 			}
 		},
 		"post": {
-			"query": "update templates set raw = :raw where name is :name;",
+			"query": "insert or ignore into templates (previous, name, raw) values (:previous, :name, :raw);",
 			"redirect": "/templates/"
 		}
 	}

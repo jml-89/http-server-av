@@ -78,6 +78,18 @@ func serveThumbs(db *sql.DB) func(http.ResponseWriter, *http.Request) {
 	}
 }
 
+func revertTemplate(db *sql.DB, name string) error {
+	// simplest and frankly disastrously crude
+	// let's go!
+	_, err := db.Exec(`
+		delete from templates 
+		where name is :name and rowid not in (
+			select previous 
+			from templates
+		);`, sql.Named("name", name))
+	return err
+}
+
 func addRoutes(db *sql.DB) ([]Route, error) {
 	otherRoutes := Fastlinks //make([]Route, 0, 10)
 
@@ -90,8 +102,14 @@ func addRoutes(db *sql.DB) ([]Route, error) {
 	routes := make(map[string]Config)
 	err = json.Unmarshal([]byte(jsonRoutes), &routes)
 	if err != nil {
-		log.Println(err)
-		return nil, err
+		log.Println("Failed to unmarshal routes JSON. Attempting to revert to previous version.")
+		// bad route json? try to rollback to previous version
+		err = revertTemplate(db, "routes")
+		if err != nil {
+			log.Println(err)
+			return nil, err
+		}
+		return addRoutes(db)
 	}
 
 	for k, cfg := range routes {
