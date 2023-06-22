@@ -12,10 +12,11 @@ import (
 )
 
 // DESIGN#1
-// "Search" is just by tags with a rather badly constructed search query builder
-// It may be wise to migrate to a schema that uses the SQLite FTS5 (Full Text Search) extension
-// It handles the search term language on its own
-// However it is more difficult to search by tag given the table layout I am using
+// Search is just by tags with a rather badly constructed search query builder
+// Initial search is fine, however there should be some further search refinement options
+
+// DESIGN#2
+// I still haven't done paginated results wahey
 
 func initDB(db *sql.DB) error {
 	log.Println("Initialising database")
@@ -27,33 +28,47 @@ func initDB(db *sql.DB) error {
 	}
 	defer tx.Rollback()
 
-	_, err = tx.Exec("CREATE TABLE IF NOT EXISTS tags (filename text, name text, val text, PRIMARY KEY(filename, name));")
-	if err != nil {
-		log.Println(err)
-		return err
+	tables := []string{
+		`create table if not exists tags (
+			filename text,
+			name text,
+			val text,
+			primary key (filename, name)
+		);`,
+
+		`create table if not exists thumbnails (
+			filename text,
+			image blob,
+			primary key (filename)
+		);`,
+
+		`create table if not exists checked (
+			filename text,
+			primary key (filename)
+		);`,
 	}
 
-	_, err = tx.Exec("CREATE TABLE IF NOT EXISTS thumbnails (filename text, image blob, PRIMARY KEY(filename));")
-	if err != nil {
-		log.Println(err)
-		return err
-	}
-
-	_, err = tx.Exec("CREATE TABLE IF NOT EXISTS checked (filename text, PRIMARY KEY(filename));")
-	if err != nil {
-		log.Println(err)
-		return err
+	for _, table := range tables {
+		_, err = tx.Exec(table)
+		if err != nil {
+			log.Println(err)
+			return err
+		}
 	}
 
 	// Only really necessary when checked table was introduced
 	// Now everything gets added to checked correctly already
-	// So this is redundant
-	_, err = tx.Exec("insert or ignore into checked (filename) select filename from tags where name is 'diskfilename';")
+	// So this is redundant -- but no harm in keeping it around
+	_, err = tx.Exec(
+		`insert or ignore into checked (filename) 
+			select filename 
+			from tags 
+			where name is 'diskfilename';
+		`)
 	if err != nil {
 		log.Println(err)
 		return err
 	}
-
 
 	err = tx.Commit()
 	if err != nil {
@@ -78,6 +93,10 @@ func initDB(db *sql.DB) error {
 	return nil
 }
 
+// "init" template should just be a json array of SQL statements to run without arguments
+// intended for creating tables mostly, but why limit yourself
+// for example:
+// [ "create table if not exists favourites (filename text primary key);" ]
 func initRest(db *sql.DB) error {
 	raw, err := getTemplate(db, "init")
 	if err != nil {
@@ -104,6 +123,93 @@ func initRest(db *sql.DB) error {
 	return nil
 }
 
+func addFileToDB(db *sql.DB, filename string) (bool, error) {
+	// This is a bit of handwave
+	// it's possibly the file is earnestly a media file but an error occurs anyway
+	// in that case then it won't be added to the db ever
+	// because it is already considered to be checked
+	// can fix this easily... think about it
+	_, err := db.Exec("insert into checked (filename) values (?);", filename)
+	if err != nil {
+		return false, nil
+	}
+
+	// Assume any failed thumbnail gen means it wasn't a media file
+	// what about audio? audio is skipped
+	thumbnail, err := CreateThumbnail(filename)
+	if err != nil {
+		return false, nil
+	}
+
+	metadata, err := GetMetadata(filename)
+	if err != nil {
+		log.Println(err)
+		return false, err
+	}
+
+	info, err := os.Stat(filename)
+	if err != nil {
+		log.Println(err)
+		return false, err
+	}
+
+	metadata["diskfiletime"] = info.ModTime().UTC().Format("2006-01-02T15:04:05")
+	metadata["diskfilename"] = filename
+	thumbname := fmt.Sprintf("%s.webp", filename)
+	metadata["thumbname"] = thumbname
+
+	tx, err := db.Begin()
+	if err != nil {
+		log.Println(err)
+		return false, err
+	}
+	defer tx.Rollback()
+
+	stmtThumb, err := tx.Prepare(`
+		insert or replace into 
+			thumbnails (filename, image) 
+			    values (       ?,     ?);
+		`)
+	if err != nil {
+		log.Println(err)
+		return false, err
+	}
+	defer stmtThumb.Close()
+
+	stmtMetadata, err := tx.Prepare(`
+		insert or replace into 
+			  tags (filename, name, val) 
+			values (       ?,    ?,   ?);
+		`)
+	if err != nil {
+		log.Println(err)
+		return false, err
+	}
+	defer stmtMetadata.Close()
+
+	_, err = stmtThumb.Exec(thumbname, thumbnail)
+	if err != nil {
+		log.Println(err)
+		return false, err
+	}
+
+	for k, v := range metadata {
+		_, err = stmtMetadata.Exec(filename, k, v)
+		if err != nil {
+			log.Println(err)
+			return false, err
+		}
+	}
+
+	err = tx.Commit()
+	if err != nil {
+		log.Println(err)
+		return false, err
+	}
+
+	return true, nil
+}
+
 func addFilesToDB(db *sql.DB, path string) (int, error) {
 	count := 0
 
@@ -113,80 +219,22 @@ func addFilesToDB(db *sql.DB, path string) (int, error) {
 	if err != nil {
 		return count, err
 	}
-	log.Printf("%v candidates found\n", len(filenames))
+	log.Printf("%v files found\n", len(filenames))
 
-	filenames, err = differenceFilesDB(db, filenames)
+	filenames, err = filesNotInDB(db, filenames)
 	if err != nil {
 		return count, err
 	}
-	log.Printf("%v candidates valid\n", len(filenames))
+	log.Printf("%v files have not been checked previously\n", len(filenames))
 
 	for _, filename := range filenames {
-		_, err = db.Exec("insert into checked (filename) values (?);", filename)
-		if err != nil {
-			continue
-		}
-
-		// Assume any failed thumbnail gen means it wasn't a media file
-		// what about audio? audio is skipped
-		thumbnail, err := CreateThumbnail(filename)
-		if err != nil {
-			continue
-		}
-
-		metadata, err := GetMetadata(filename)
+		ok, err := addFileToDB(db, filename)
 		if err != nil {
 			return count, err
 		}
-
-		info, err := os.Stat(filename)
-		if err != nil {
-			return count, err
+		if ok {
+			count++
 		}
-
-		metadata["diskfiletime"] = info.ModTime().UTC().Format("2006-01-02T15:04:05")
-		metadata["diskfilename"] = filename
-		thumbname := fmt.Sprintf("%s.webp", filename)
-		metadata["thumbname"] = thumbname
-
-		tx, err := db.Begin()
-		if err != nil {
-			return count, err
-		}
-		defer tx.Rollback()
-
-		stmtThumb, err := tx.Prepare("INSERT OR REPLACE INTO thumbnails (filename, image) VALUES (?, ?);")
-		if err != nil {
-			return count, err
-		}
-		defer stmtThumb.Close()
-
-		stmtMetadata, err := tx.Prepare("INSERT OR REPLACE INTO tags (filename, name, val) VALUES (?, ?, ?);")
-		if err != nil {
-			return count, err
-		}
-		defer stmtMetadata.Close()
-
-		_, err = stmtThumb.Exec(thumbname, thumbnail)
-		if err != nil {
-			return count, err
-		}
-
-		for k, v := range metadata {
-			_, err = stmtMetadata.Exec(filename, k, v)
-			if err != nil {
-				log.Println(err)
-				return count, err
-			}
-		}
-
-		err = tx.Commit()
-		if err != nil {
-			log.Println(err)
-			return count, err
-		}
-
-		count++
 
 	}
 
@@ -194,7 +242,13 @@ func addFilesToDB(db *sql.DB, path string) (int, error) {
 }
 
 func initTemplates(db *sql.DB) error {
-	_, err := db.Exec("create table if not exists templates (previous integer, name text, raw text, primary key (previous, name));")
+	_, err := db.Exec(`
+		create table if not exists templates (
+			previous integer,
+			name text,
+			raw text,
+			primary key (previous, name)
+		);`)
 	if err != nil {
 		log.Println(err)
 		return err
@@ -207,7 +261,10 @@ func initTemplates(db *sql.DB) error {
 	}
 	defer tx.Rollback()
 
-	stmtUpdate, err := tx.Prepare("insert or ignore into templates (name, raw, previous) values (?, ?, 0);")
+	stmtUpdate, err := tx.Prepare(`
+		insert or ignore into 
+		templates (name, raw, previous) 
+		values    (   ?,   ?,        0);`)
 	if err != nil {
 		log.Println(err)
 		return err
@@ -266,7 +323,10 @@ func cullMissing(db *sql.DB, dir string) error {
 	defer stmt.Close()
 
 	count := 0
-	rows, err := tx.Query("select filename, val from tags where name is 'diskfilename';")
+	rows, err := tx.Query(`
+		select filename, val 
+		from tags 
+		where name is 'diskfilename';`)
 	if err != nil {
 		log.Println(err)
 		return err
@@ -311,7 +371,8 @@ func cullMissing(db *sql.DB, dir string) error {
 	return nil
 }
 
-func differenceFilesDB(db *sql.DB, filenames []string) ([]string, error) {
+// returns a slice of files which are not in the database
+func filesNotInDB(db *sql.DB, filenames []string) ([]string, error) {
 	newFiles := make([]string, 0, len(filenames))
 
 	rows, err := db.Query("select filename from checked;")
@@ -342,50 +403,6 @@ func differenceFilesDB(db *sql.DB, filenames []string) ([]string, error) {
 	return newFiles, nil
 }
 
-func updateDB(db *sql.DB, dir string) error {
-	files, err := recls(dir)
-	if err != nil {
-		return err
-	}
-
-	files, err = differenceFilesDB(db, files)
-
-	for _, file := range files {
-		log.Printf("%s not in database\n", file)
-	}
-
-	return nil
-}
-
-func getAllTags(db *sql.DB, filename string) (map[string]string, error) {
-	res := make(map[string]string)
-
-	stmt := "select name, val from tags where filename is ?;"
-	rows, err := db.Query(stmt, filename)
-	if err != nil {
-		return res, err
-	}
-	defer rows.Close()
-
-	count := 0
-	for rows.Next() {
-		var n, v string
-		err = rows.Scan(&n, &v)
-		if err != nil {
-			return res, err
-		}
-		res[n] = v
-		count++
-	}
-
-	res["filename"] = filename
-	//res["filenamequery"] = url.QueryEscape(filename)
-	//res["filenamepath"] = url.PathEscape(filename)
-	//res["thumbname"] = url.PathEscape(res["thumbname"])
-
-	return res, nil
-}
-
 type SearchParameters struct {
 	Vals        []string
 	KeyVals     map[string]string
@@ -393,37 +410,38 @@ type SearchParameters struct {
 	RandomOrder bool
 }
 
+// This is unfortunately a SQL query string building function
+// sqlite3 FSTS didn't really fit with my table design and goals
+// FSTS could be used... but would need to create a specific FSTS table with data modified to suit it
 func lookup2(db *sql.DB, params SearchParameters) ([][]string, error) {
-	rescap := params.Limit
-	if rescap == 0 {
-		rescap = 50
-	}
-
-	res := make([][]string, 0, rescap)
-
+	// the final query is made of bricks glued together
+	// it mostly builds up a lot of subqueries
+	// sqlite3 in-built function "instr" is used a lot
 	bricks := make([]string, 0, 20)
 	bricks = append(bricks, "select filename, val from tags where name is 'thumbname'")
 	glue := "and"
 	fills := make([]interface{}, 0, 20)
 
-	if len(params.Vals) > 0 {
-		for _, v := range params.Vals {
-			bricks = append(bricks, glue)
-			//bricks = append(bricks, "filename in (select distinct(filename) from tags where val like '%' || ? || '%')")
-			bricks = append(bricks, "filename in (select distinct(filename) from tags where INSTR(LOWER(val), LOWER(?)) > 0)")
-			fills = append(fills, v)
-			glue = "and"
-		}
+	for _, v := range params.Vals {
+		bricks = append(bricks, glue)
+		bricks = append(bricks, `
+			filename in (
+				select distinct(filename) 
+				from tags 
+				where instr(lower(val), lower(?)) > 0
+			)`)
+		fills = append(fills, v)
 	}
 
-	if len(params.KeyVals) > 0 {
-		for k, v := range params.KeyVals {
-			bricks = append(bricks, glue)
-			//bricks = append(bricks, "filename in (select filename from tags where name is ? and val like '%' || ? || '%')")
-			bricks = append(bricks, "filename in (select filename from tags where name is ? and INSTR(LOWER(val), LOWER(?)) > 0)")
-			fills = append(fills, k, v)
-			glue = "and"
-		}
+	for k, v := range params.KeyVals {
+		bricks = append(bricks, glue)
+		bricks = append(bricks, `
+			filename in (
+				select filename 
+				from tags 
+				where name is ? and instr(lower(val), lower(?)) > 0
+			)`)
+		fills = append(fills, k, v)
 	}
 
 	if params.RandomOrder {
@@ -437,6 +455,12 @@ func lookup2(db *sql.DB, params SearchParameters) ([][]string, error) {
 
 	bricks = append(bricks, ";")
 
+	rescap := params.Limit
+	if rescap == 0 {
+		rescap = 50
+	}
+	res := make([][]string, 0, rescap)
+
 	query := strings.Join(bricks, " ")
 	log.Printf("\n%s\n%v\n", query, fills)
 	rows, err := db.Query(query, fills...)
@@ -445,21 +469,19 @@ func lookup2(db *sql.DB, params SearchParameters) ([][]string, error) {
 	}
 
 	for rows.Next() {
-		cols := make([]string, 0, 2)
-
 		var filename string
 		var thumbname string
 		err = rows.Scan(&filename, &thumbname)
 		if err != nil {
 			return res, err
 		}
-		cols = append(cols, filename, thumbname)
-		res = append(res, cols)
+		res = append(res, []string{filename, thumbname})
 	}
 
 	return res, err
 }
 
+// changes all tags to lowercase
 func fixtags(db *sql.DB) error {
 	tx, err := db.Begin()
 	if err != nil {
@@ -537,7 +559,12 @@ func stringsplat(s, cutset string) []string {
 }
 
 func wordassocs(db *sql.DB) error {
-	_, err := db.Exec("create table if not exists wordassocs (filename text, word text, primary key(filename, word) on conflict ignore);")
+	_, err := db.Exec(`
+		create table if not exists wordassocs (
+			filename text,
+			word text,
+			primary key (filename, word) on conflict ignore
+		);`)
 	if err != nil {
 		log.Println(err)
 		return err
@@ -550,14 +577,24 @@ func wordassocs(db *sql.DB) error {
 	}
 	defer tx.Rollback()
 
-	rows, err := db.Query("select filename, val from tags where filename not in (select distinct(filename) from wordassocs);")
+	rows, err := db.Query(`
+		select filename, val 
+		from tags 
+		where filename not in (
+			select distinct(filename) 
+			from wordassocs
+		);`)
 	if err != nil {
 		log.Println(err)
 		return err
 	}
 	defer rows.Close()
 
-	stmtUpdate, err := tx.Prepare("insert into wordassocs (filename, word) values (?, ?);")
+	stmtUpdate, err := tx.Prepare(`
+		insert into 
+			wordassocs (filename, word) 
+			values     (       ?,    ?);
+		`)
 	if err != nil {
 		log.Println(err)
 		return err
@@ -596,41 +633,65 @@ func wordassocs(db *sql.DB) error {
 func parseSearchTerms(formterms []string) SearchParameters {
 	terms := make([]string, 0, 50)
 	for _, term := range formterms {
-		inQuotes := false
 		lo := 0
 		i := 0
-		for _, c := range term {
-			if inQuotes {
-				if c == '"' {
-					if i > lo {
-						terms = append(terms, term[lo:i])
-					}
-					lo = i + 1
-					inQuotes = false
-				}
-			} else if c == '"' {
-				if i > lo {
-					terms = append(terms, term[lo:i])
-				}
-				inQuotes = true
-				lo = i + 1
-			} else if c == ' ' {
-				if i > lo {
-					terms = append(terms, term[lo:i])
-				}
-				lo = i + 1
-			} else if c == ':' {
-				if i > lo {
-					terms = append(terms, term[lo:i+1])
-				}
-				lo = i + 1
+
+		basegrow := func(x int) {
+			if i > lo {
+				terms = append(terms, term[lo:i+x])
 			}
-			i++
+			lo = i + 1
 		}
 
-		if i > lo {
-			terms = append(terms, term[lo:i])
+		grow := func() {
+			basegrow(0)
 		}
+
+		altgrow := func() {
+			basegrow(1)
+		}
+
+		type roller func(rune) roller
+		var quoteroller, baseroller roller
+
+		baseroller = func(c rune) roller {
+			switch c {
+			case '"':
+				grow()
+				return quoteroller
+
+			case ' ':
+				grow()
+				return baseroller
+
+			case ':':
+				altgrow()
+				return baseroller
+
+			default:
+				return baseroller
+			}
+		}
+
+		quoteroller = func(c rune) roller {
+			switch c {
+			case '"':
+				grow()
+				return baseroller
+
+			default:
+				return quoteroller
+			}
+		}
+
+		// using a state machine, the work loop looks so clean now
+		// but how obvious is the state machine code?
+		step := baseroller
+		for _, c := range term {
+			step = step(c)
+			i++
+		}
+		grow()
 	}
 
 	log.Printf("Terms:\n")

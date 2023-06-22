@@ -50,7 +50,7 @@ func serveThumbs(db *sql.DB) func(http.ResponseWriter, *http.Request) {
 		}
 		defer tx.Rollback()
 
-		stmt, err := tx.Prepare("SELECT image FROM thumbnails WHERE filename is ?;")
+		stmt, err := tx.Prepare("select image from thumbnails where filename is ?;")
 		if err != nil {
 			log.Println(err)
 			return
@@ -257,6 +257,25 @@ func createPostHandler(db *sql.DB, cfg *ConfigPost) func(http.ResponseWriter, *h
 	}
 }
 
+//	"get": {
+//		"template": "{{template_name}}",
+//		"items": {
+//			"constant": {
+//				"{{variable_name}}": "{{some_value}}",
+//				...
+//				"{{variable_name}}": "{{some_value}}"
+//			},
+//			"query": {
+//				"{{variable_name}}": "{{some_query}}",
+//				...
+//				"{{variable_name}}": "{{some_query}}"
+//			}
+//		}
+//	}
+//
+// Warnings
+//
+//	constant and query values share the same namespace
 func createGetHandler(db *sql.DB, cfg *ConfigGet) func(http.ResponseWriter, *http.Request) {
 	if cfg == nil {
 		return func(w http.ResponseWriter, req *http.Request) {
