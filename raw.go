@@ -24,16 +24,26 @@ var starterTemplates = map[string]string{
 
 		#top-bar {
 			display: flex;
-			flex-direction: row;
+			flex-direction: column;
 			align-items: stretch;
 		}
 
-		#search-area {
-			margin-left: auto;
+		#top-bar > * {
+			margin: 0.2rem;
 		}
 
 		#search-terms {
 			width: 35rem;
+		}
+
+		#search-refinements {
+			display: flex;
+			flex-direction: row;
+			align-items: stretch;
+		}
+
+		#search-refinements > * {
+			margin: 0.1rem;
 		}
 
 		.media-item {
@@ -75,6 +85,14 @@ var starterTemplates = map[string]string{
 				<input type="text" name="terms" id="search-terms" value="{{.terms}}" required>
 				<input type="submit" value="Search">
 			</form>
+
+			{{if .refinements}}
+			<div id="search-refinements">
+				{{range $i, $e := .refinements}}
+				<a href="/search?terms={{$.terms}} {{$e}}">{{$e}}</a>
+				{{end}}
+			</div>
+			{{end}}
 		</div>
 		{{template "body" .}}
 	</body>
@@ -140,7 +158,7 @@ var starterTemplates = map[string]string{
 <div id="thumbs">
 {{range $idx, $elem := .videos}}
 	<div class="media-item">
-		<a href="/watch?filename={{index $elem 0 | escapequery}}"><img src="/tmb/{{index $elem 1 | escapepath}}"/>
+		<a href="/watch?filename={{index $elem 0 | escapequery}}{{if $.terms}}&terms={{$.terms}}{{end}}"><img src="/tmb/{{index $elem 1 | escapepath}}"/>
 		<h2>{{index $elem 0}}</h2></a>
 	</div>
 {{end}}
@@ -199,7 +217,28 @@ var starterTemplates = map[string]string{
 					"count": "50"
 				},
 				"query": {
-					"videos": "select a.filename, b.val from tags a join tags b on a.filename = b.filename where a.name is 'diskfiletime' and b.name is 'thumbname' order by a.val desc limit 50;" 
+					"videos": "select filename, val from tags where name is 'thumbname' order by rowid desc limit 50;"
+				}
+			}
+		}
+	},
+
+	"/search": {
+		"get": {
+			"template": "index",
+			"items": {
+				"search": {
+					"searchresults": {
+						"arg": "terms",
+						"orderby": "rowid",
+						"orderdesc": true,
+						"offset": 0,
+						"limit": 50
+					}
+				},
+				"query": {
+					"videos": "select filename, val from tags where name is 'thumbname' and filename is :searchresults",
+					"refinements": "select word from wordassocs where filename is :searchresults order by random() limit 1;"
 				}
 			}
 		}

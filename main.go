@@ -56,11 +56,10 @@ func main() {
 
 	http.Handle("/file/", http.StripPrefix("/file/", http.FileServer(http.Dir(pathMedia))))
 	http.HandleFunc("/tmb/", serveThumbs(db))
-	rs, err := addRoutes(db)
+	_, err = addRoutes(db)
 	if err != nil {
 		log.Fatal(err)
 	}
-	http.HandleFunc("/search", createSearchHandler(db, rs))
 
 	log.Printf("Adding media files to database...\n")
 	count, err := addFilesToDB(db, pathMedia)

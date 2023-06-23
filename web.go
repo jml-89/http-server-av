@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 )
 
@@ -26,6 +27,15 @@ type TemplateFill struct {
 	Routes   []Route
 	Constant map[string]string
 	Query    map[string]string
+	Search   map[string]SearchBundle
+}
+
+type SearchBundle struct {
+	Arg       string
+	OrderBy   string
+	OrderDesc bool
+	Offset    int
+	Limit     int
 }
 
 type ConfigGet struct {
@@ -130,6 +140,7 @@ func addRoutes(db *sql.DB) ([]Route, error) {
 	return otherRoutes, nil
 }
 
+/*
 func createSearchHandler(db *sql.DB, otherRoutes []Route) func(http.ResponseWriter, *http.Request) {
 	return func(w http.ResponseWriter, req *http.Request) {
 		td := make(map[string]interface{})
@@ -161,6 +172,7 @@ func createSearchHandler(db *sql.DB, otherRoutes []Route) func(http.ResponseWrit
 		}
 	}
 }
+*/
 
 func loadTemplate(db *sql.DB, name string) (*template.Template, error) {
 	rawBase, err := getTemplate(db, "base")
@@ -203,6 +215,58 @@ func createSoftServe(cfg Config, db *sql.DB) (http.HandlerFunc, error) {
 			fmt.Fprintf(w, "Method not implemented: %s\n", req.Method)
 		}
 	}, nil
+}
+
+func permutations(form map[string][]string) [][]sql.NamedArg {
+	link := make([][]sql.NamedArg, 0, len(form))
+	for k, vs := range form {
+		linkline := make([]sql.NamedArg, 0, len(vs))
+		for _, v := range vs {
+			s, err := url.QueryUnescape(v)
+			if err != nil {
+				s = v
+			}
+			linkline = append(linkline, sql.Named(k, s))
+		}
+		link = append(link, linkline)
+	}
+
+	/*
+		for _, vs := range link {
+			for _, v := range vs {
+				log.Printf("\t%s: %v\n", v.Name, v.Value)
+			}
+		}
+	*/
+
+	var step func([][]sql.NamedArg) [][]sql.NamedArg
+	step = func(form [][]sql.NamedArg) [][]sql.NamedArg {
+		res := make([][]sql.NamedArg, 0, 10)
+		if len(form) < 1 {
+			return res
+		}
+
+		// last entry
+		if len(form) == 1 {
+			for _, x := range form[0] {
+				res = append(res, []sql.NamedArg{x})
+			}
+			return res
+		}
+
+		for _, x := range form[0] {
+			for _, ys := range step(form[1:]) {
+				zs := make([]sql.NamedArg, 0, len(form))
+				zs = append(zs, x)
+				zs = append(zs, ys...)
+				res = append(res, zs)
+			}
+		}
+
+		return res
+	}
+
+	return step(link)
 }
 
 func createPostHandler(db *sql.DB, cfg *ConfigPost) func(http.ResponseWriter, *http.Request) {
@@ -290,88 +354,205 @@ func createGetHandler(db *sql.DB, cfg *ConfigGet) func(http.ResponseWriter, *htt
 			return
 		}
 
-		args := make([]any, 0, 10)
-		for k, vs := range req.Form {
-			v, err := url.QueryUnescape(vs[0])
-			if err != nil {
-				log.Println(err)
-				return
+		/*
+			args := make([]any, 0, 10)
+			for k, vs := range req.Form {
+				v, err := url.QueryUnescape(vs[0])
+				if err != nil {
+					log.Println(err)
+					return
+				}
+				//log.Printf("\t'%s':'%v'\n", k, v)
+				args = append(args, sql.Named(k, v))
 			}
-			//log.Printf("\t'%s':'%v'\n", k, v)
-			args = append(args, sql.Named(k, v))
-		}
+		*/
 
 		td := make(map[string]interface{})
 
 		td["path"] = req.URL.Path
+		td["routes"] = cfg.Items.Routes
+
+		if _, ok := req.Form["terms"]; ok {
+			td["terms"] = strings.Join(req.Form["terms"], " ")
+		}
+
+		for k, v := range cfg.Items.Search {
+			params := parseSearchTerms(req.Form[v.Arg])
+
+			params.Offset = v.Offset
+			params.Limit = v.Limit
+			params.OrderBy = v.OrderBy
+			params.OrderDesc = v.OrderDesc
+
+			if _, ok := req.Form["offset"]; ok {
+				n, err := strconv.Atoi(req.Form["offset"][0])
+				if err != nil {
+					log.Println(err)
+				} else {
+					params.Offset = n
+				}
+			}
+
+			if _, ok := req.Form["limit"]; ok {
+				n, err := strconv.Atoi(req.Form["limit"][0])
+				if err != nil {
+					log.Println(err)
+				} else {
+					params.Limit = n
+				}
+			}
+
+			if _, ok := req.Form["orderby"]; ok {
+				params.OrderBy = req.Form["orderby"][0]
+			}
+
+			if _, ok := req.Form["orderdesc"]; ok {
+				params.OrderDesc = req.Form["orderdesc"][0] == "true"
+			}
+
+			req.Form[k], err = lookup2(db, params)
+			if err != nil {
+				log.Println(err)
+				return
+			}
+		}
+
+		for k, v := range req.Form {
+			log.Printf("%s: %v\n", k, v)
+		}
+		superSet := permutations(req.Form)
+		for i, vs := range superSet {
+			log.Printf("%d\n", i)
+			for _, v := range vs {
+				log.Printf("\t%s: %v\n", v.Name, v.Value)
+			}
+		}
 
 		for k, v := range cfg.Items.Constant {
 			td[k] = v
 		}
 
-		td["routes"] = cfg.Items.Routes
-
 		for k, v := range cfg.Items.Query {
-			var rows *sql.Rows
-			if len(args) == 0 {
-				log.Printf("%s\n", v)
-				rows, err = db.Query(v)
-			} else {
-				log.Printf("%s, args: %v\n", v, args)
-				rows, err = db.Query(v, args...)
-			}
-			if err != nil {
-				log.Println(err)
-				return
-			}
-			defer rows.Close()
+			fill := make([][]string, 0, 100)
 
-			cols, err := rows.Columns()
-			if err != nil {
-				log.Println(err)
-				return
-			}
-
-			results := make([][]string, 0, 50)
-			for rows.Next() {
-				result := make([]any, len(cols), len(cols))
-				for i := 0; i < len(cols); i++ {
-					result[i] = new(string)
-				}
-				err = rows.Scan(result...)
+			if len(superSet) == 0 {
+				log.Println("No arguments codepath")
+				// argless query
+				elems, err := runQuery(db, v, []any{})
 				if err != nil {
 					log.Println(err)
 					return
 				}
-				r2 := make([]string, 0, len(cols))
-				for _, field := range result {
-					r2 = append(r2, *field.(*string))
-				}
-				results = append(results, r2)
-			}
-
-			// if there's just one field per row, flatten it into a simple 1 dimensional slice
-			// no point incurring even more type diving overhead on the templates
-			if len(cols) == 1 {
-				flatsults := make([]string, 0, len(results))
-				for _, result := range results {
-					flatsults = append(flatsults, result[0])
-				}
-				td[k] = flatsults
+				fill = append(fill, elems...)
 			} else {
-				td[k] = results
+				log.Println("Arguments codepath")
+				for _, args := range superSet {
+					shittyArgs := make([]any, 0, len(args))
+					for _, arg := range args {
+						shittyArgs = append(shittyArgs, any(arg))
+					}
+					elems, err := runQuery(db, v, shittyArgs)
+					if err != nil {
+						log.Println(err)
+						return
+					}
+					fill = append(fill, elems...)
+				}
 			}
 
+			maxlen := 0
+			for _, xs := range fill {
+				if len(xs) > maxlen {
+					maxlen = len(xs)
+				}
+			}
+
+			if maxlen == 1 {
+				// flatten
+				squash := make([]string, 0, len(fill))
+				for _, xs := range fill {
+					squash = append(squash, xs[0])
+				}
+				td[k] = squash
+			} else {
+				td[k] = fill
+			}
 		}
 
 		tmpl, err := loadTemplate(db, cfg.Template)
 		if err != nil {
-			log.Fatal(err)
+			log.Println(err)
+			return
 		}
 
 		err = tmpl.Execute(w, td)
 		if err != nil {
-			log.Fatal(err)
+			log.Println(err)
+			return
 		}
 	}
+}
+
+// route struct has query _> run query -> fill template with results
+func runQuery(db *sql.DB, query string, args []any) ([][]string, error) {
+	var rows *sql.Rows
+	var err error
+	if len(args) == 0 {
+		log.Printf("%s\n", query)
+		rows, err = db.Query(query)
+	} else {
+		log.Printf("Query: %s\n", query)
+		for _, arg := range args {
+			log.Printf("\t%v\n", arg)
+		}
+		rows, err = db.Query(query, args...)
+	}
+	if err != nil {
+		log.Println(err)
+		return nil, err
+	}
+	defer rows.Close()
+
+	cols, err := rows.Columns()
+	if err != nil {
+		log.Println(err)
+		return nil, err
+	}
+
+	results := make([][]string, 0, 50)
+	for rows.Next() {
+		result := make([]any, len(cols), len(cols))
+		for i := 0; i < len(cols); i++ {
+			result[i] = new(string)
+		}
+
+		err = rows.Scan(result...)
+		if err != nil {
+			log.Println(err)
+			return nil, err
+		}
+
+		r2 := make([]string, 0, len(cols))
+		for _, field := range result {
+			r2 = append(r2, *field.(*string))
+		}
+
+		results = append(results, r2)
+	}
+
+	return results, nil
+
+	/*
+		// if there's just one field per row, flatten it into a simple 1 dimensional slice
+		// no point incurring even more type diving overhead on the templates
+		if len(cols) == 1 {
+			flatsults := make([]string, 0, len(results))
+			for _, result := range results {
+				flatsults = append(flatsults, result[0])
+			}
+			return flatsults, nil
+		}
+
+		return results, nil
+	*/
 }

@@ -404,21 +404,27 @@ func filesNotInDB(db *sql.DB, filenames []string) ([]string, error) {
 }
 
 type SearchParameters struct {
-	Vals        []string
-	KeyVals     map[string]string
-	Limit       int
-	RandomOrder bool
+	Vals      []string
+	KeyVals   map[string]string
+	Offset    int
+	Limit     int
+	OrderBy   string
+	OrderDesc bool
 }
 
 // This is unfortunately a SQL query string building function
 // sqlite3 FSTS didn't really fit with my table design and goals
 // FSTS could be used... but would need to create a specific FSTS table with data modified to suit it
-func lookup2(db *sql.DB, params SearchParameters) ([][]string, error) {
+func lookup2(db *sql.DB, params SearchParameters) ([]string, error) {
 	// the final query is made of bricks glued together
 	// it mostly builds up a lot of subqueries
 	// sqlite3 in-built function "instr" is used a lot
 	bricks := make([]string, 0, 20)
-	bricks = append(bricks, "select filename, val from tags where name is 'thumbname'")
+	bricks = append(bricks, `
+		select filename
+		from tags
+		where name is 'diskfiletime'
+		`)
 	glue := "and"
 	fills := make([]interface{}, 0, 20)
 
@@ -439,13 +445,29 @@ func lookup2(db *sql.DB, params SearchParameters) ([][]string, error) {
 			filename in (
 				select filename 
 				from tags 
-				where name is ? and instr(lower(val), lower(?)) > 0
+				where name is ? 
+				and instr(lower(val), lower(?)) > 0
 			)`)
 		fills = append(fills, k, v)
 	}
 
-	if params.RandomOrder {
+	if params.OrderBy == "time" {
+		bricks = append(bricks, "order by val")
+		if params.OrderDesc {
+			bricks = append(bricks, "desc")
+		}
+	} else if params.OrderBy == "random" {
 		bricks = append(bricks, "order by random()")
+	} else if params.OrderBy == "rowid" {
+		bricks = append(bricks, "order by rowid")
+		if params.OrderDesc {
+			bricks = append(bricks, "desc")
+		}
+	}
+
+	if params.Offset > 0 {
+		bricks = append(bricks, "offset ?")
+		fills = append(fills, params.Offset)
 	}
 
 	if params.Limit > 0 {
@@ -459,7 +481,7 @@ func lookup2(db *sql.DB, params SearchParameters) ([][]string, error) {
 	if rescap == 0 {
 		rescap = 50
 	}
-	res := make([][]string, 0, rescap)
+	res := make([]string, 0, rescap)
 
 	query := strings.Join(bricks, " ")
 	log.Printf("\n%s\n%v\n", query, fills)
@@ -470,12 +492,11 @@ func lookup2(db *sql.DB, params SearchParameters) ([][]string, error) {
 
 	for rows.Next() {
 		var filename string
-		var thumbname string
-		err = rows.Scan(&filename, &thumbname)
+		err = rows.Scan(&filename)
 		if err != nil {
 			return res, err
 		}
-		res = append(res, []string{filename, thumbname})
+		res = append(res, filename)
 	}
 
 	return res, err
@@ -700,10 +721,12 @@ func parseSearchTerms(formterms []string) SearchParameters {
 	}
 
 	params := SearchParameters{
-		Vals:        make([]string, 0, 50),
-		KeyVals:     make(map[string]string),
-		RandomOrder: true,
-		Limit:       50,
+		Vals:      make([]string, 0, 50),
+		KeyVals:   make(map[string]string),
+		OrderBy:   "random",
+		OrderDesc: false,
+		Offset:    0,
+		Limit:     50,
 	}
 
 	skip := false
