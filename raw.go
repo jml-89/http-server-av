@@ -207,100 +207,200 @@ var starterTemplates = map[string]string{
 	"create table if not exists favourites (filename text, primary key (filename));"
 ]
 `,
-	"routes": `
-{
+}
+
+var routeDefaultSearches = map[string]map[string]SearchBundle{
+	"/search": {
+		"searchresults": {
+			Arg:       "terms",
+			OrderBy:   "rowid",
+			OrderDesc: true,
+			Offset:    0,
+			Limit:     50,
+		},
+	},
+}
+
+var routeDefaults = map[string]map[string]string{
 	"/": {
-		"get": {
-			"template": "index",
-			"items": {
-				"constant": {
-					"count": "50"
-				},
-				"query": {
-					"videos": "select filename, val from tags where name is 'thumbname' order by rowid desc limit 50;"
-				}
-			}
-		}
+		"method":   "get",
+		"template": "index",
 	},
 
 	"/search": {
-		"get": {
-			"template": "index",
-			"items": {
-				"search": {
-					"searchresults": {
-						"arg": "terms",
-						"orderby": "rowid",
-						"orderdesc": true,
-						"offset": 0,
-						"limit": 50
-					}
-				},
-				"query": {
-					"videos": "select filename, val from tags where name is 'thumbname' and filename is :searchresults",
-					"refinements": "select word from wordassocs where filename is :searchresults order by random() limit 1;"
-				}
-			}
-		}
+		"method":   "get",
+		"template": "index",
 	},
 
 	"/favourites/": {
-		"get": {
-			"template": "index",
-			"items": {
-				"query": {
-					"videos": "select a.filename, a.val from favourites b join tags a on a.filename = b.filename where a.name is 'thumbname';"
-				}
-			}
-		}
-	},
-
-	"/favourites/add": {
-		"post": {
-			"query": "insert or ignore into favourites (filename) values (:filename);",
-			"redirect": "/favourites/"
-		}
+		"alias":    "Favourites",
+		"method":   "get",
+		"template": "index",
 	},
 
 	"/favourites/remove": {
-		"post": {
-			"query": "delete from favourites where filename is :filename;",
-			"redirect": "/favourites/"
-		}
+		"method":   "post",
+		"redirect": "/favourites/",
+	},
+
+	"/favourites/add": {
+		"method":   "post",
+		"redirect": "/favourites/",
 	},
 
 	"/watch": {
-		"get": {
-			"template": "video",
-			"items": {
-				"query": {
-					"filename": "select distinct(filename) from tags where filename is :filename;",
-					"title": "select val from tags where filename is :filename and name is 'title';",
-					"artist": "select val from tags where filename is :filename and name is 'artist';",
-					"tags": "select name, val from tags where filename is :filename;",
-					"related": "select filename, val from tags where name is 'thumbname' and filename in (select filename from wordassocs a where a.word in (select word from wordassocs where filename is :filename) group by a.filename order by (count(a.filename) * 100) / (select count(*) from wordassocs where filename is a.filename) desc limit 10);",
-					"favourite": "select filename from favourites where filename is :filename;"
-				}
-			}
-		}
+		"method":   "get",
+		"template": "video",
 	},
 
 	"/templates/": {
-		"get": {
-			"template": "templates",
-			"items": {
-				"query": {
-					"elements": "select name, raw, rowid from templates where rowid not in (select previous from templates);"
-				}
-			}
-		},
-		"post": {
-			"query": "insert or ignore into templates (previous, name, raw) values (:previous, :name, :raw);",
-			"redirect": "/templates/"
-		}
-	}
+		"alias":    "Templates",
+		"method":   "get",
+		"template": "templates",
+	},
+
+	"/templates/add": {
+		"method":   "post",
+		"redirect": "/templates/",
+	},
 }
-`,
+
+var routeDefaultQueries = map[string]map[string]string{
+	"/watch": {
+		"filename": `
+			select distinct(filename) 
+			from tags 
+			where filename is :filename;
+		`,
+
+		"title": `
+			select val 
+			from tags 
+			where filename is :filename 
+			and name is 'title';
+		`,
+
+		"artist": `
+			select val 
+			from tags 
+			where filename is :filename 
+			and name is 'artist';
+		`,
+
+		"tags": `
+			select name, val 
+			from tags 
+			where filename is :filename;
+		`,
+
+		"favourite": `
+			select filename 
+			from favourites 
+			where filename is :filename;
+		`,
+
+		"related": `
+			with countword(filename, num) as (
+				select filename, count(*)
+				from wordassocs
+				group by filename
+			), related(filename, score) as (
+				select 
+					a.filename, 
+					count(*)
+				from wordassocs a
+				where a.word in (
+					select word
+					from wordassocs
+					where filename is :filename
+				)
+				and a.filename is not :filename
+				group by a.filename having count(*) > 0
+			)
+			select filename, val 
+			from tags
+			where name is 'thumbname'
+			and filename in (
+				select a.filename
+				from (select * from countword where filename is :filename) c
+				left outer join related a
+				join countword b on a.filename is b.filename
+				order by (a.score * 200) / (b.num + c.num) desc
+				limit 25
+			);
+		`,
+	},
+
+	"/templates/": {
+		"elements": `
+			select name, raw, rowid 
+			from templates 
+			where rowid not in (
+				select previous from templates);
+			`,
+	},
+
+	"/templates/add": {
+		"query": `
+			insert or ignore into 
+			templates (previous, name, raw) 
+			values (:previous, :name, :raw);
+		`,
+	},
+
+	"/": {
+		"videos": `
+			select filename, val 
+			from tags 
+			where name is 'thumbname' 
+			order by rowid desc 
+			limit 50;
+		`,
+	},
+
+	"/search": {
+		"videos": `
+			select a.filename, val 
+			from ({{searchresults}}) b 
+			join tags a 
+			on b.filename is a.filename 
+			and a.name is 'thumbname';
+		`,
+
+		"refinements": `
+			select word from wordassocs a 
+			join ({{searchresults}}) b 
+			on a.filename is b.filename 
+			group by a.word 
+			having count(a.word) > 5 
+			order by random() 
+			limit 10;
+		`,
+	},
+
+	"/favourites/": {
+		"videos": `
+			select a.filename, a.val 
+			from favourites b join tags a 
+			on a.filename = b.filename 
+			where a.name is 'thumbname';
+		`,
+	},
+
+	"/favourites/add": {
+		"query": `
+			insert or ignore into 
+				favourites (filename) 
+				values (:filename);
+		`,
+	},
+
+	"/favourites/remove": {
+		"query": `
+			delete from favourites 
+			where filename is :filename;
+		`,
+	},
 }
 
 var Fastlinks []Route = []Route{

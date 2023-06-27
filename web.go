@@ -14,8 +14,9 @@ import (
 )
 
 type Route struct {
-	Path  string
-	Alias string
+	Path   string
+	Method string
+	Alias  string
 }
 
 type Config struct {
@@ -103,38 +104,29 @@ func revertTemplate(db *sql.DB, name string) error {
 func addRoutes(db *sql.DB) ([]Route, error) {
 	otherRoutes := Fastlinks //make([]Route, 0, 10)
 
-	jsonRoutes, err := getTemplate(db, "routes")
+	rows, err := db.Query(`
+		select 
+			path
+		from 
+			routes;
+	`)
 	if err != nil {
 		log.Println(err)
 		return nil, err
 	}
 
-	routes := make(map[string]Config)
-	err = json.Unmarshal([]byte(jsonRoutes), &routes)
-	if err != nil {
-		log.Println("Failed to unmarshal routes JSON. Attempting to revert to previous version.")
-		// bad route json? try to rollback to previous version
-		err = revertTemplate(db, "routes")
+	for rows.Next() {
+		var path string
+		err = rows.Scan(&path)
 		if err != nil {
 			log.Println(err)
 			return nil, err
 		}
-		return addRoutes(db)
-	}
 
-	for k, cfg := range routes {
-		if cfg.Get != nil {
-			cfg.Get.Items.Routes = otherRoutes
-		}
+		handler := createSuperSoftServe(db, path)
 
-		handler, err := createSoftServe(cfg, db)
-		if err != nil {
-			log.Println(err)
-			return otherRoutes, err
-		}
-
-		log.Printf("Adding handler for '%s' route\n", k)
-		http.HandleFunc(k, handler)
+		log.Printf("Adding handler for '%s' route\n", path)
+		http.HandleFunc(path, handler)
 	}
 
 	return otherRoutes, nil
@@ -196,6 +188,235 @@ func loadTemplate(db *sql.DB, name string) (*template.Template, error) {
 	template.Must(tmpl.New("body").Funcs(fns).Parse(string(rawTmpl)))
 
 	return tmpl, nil
+}
+
+func prepareSearchParams(form url.Values, bundle SearchBundle) SearchParameters {
+	params := parseSearchTerms(form[bundle.Arg])
+
+	params.Offset = bundle.Offset
+	params.Limit = bundle.Limit
+	params.OrderBy = bundle.OrderBy
+	params.OrderDesc = bundle.OrderDesc
+
+	if _, ok := form["offset"]; ok {
+		n, err := strconv.Atoi(form["offset"][0])
+		if err != nil {
+			log.Println(err)
+		} else {
+			params.Offset = n
+		}
+	}
+
+	if _, ok := form["limit"]; ok {
+		n, err := strconv.Atoi(form["limit"][0])
+		if err != nil {
+			log.Println(err)
+		} else {
+			params.Limit = n
+		}
+	}
+
+	if _, ok := form["orderby"]; ok {
+		params.OrderBy = form["orderby"][0]
+	}
+
+	if _, ok := form["orderdesc"]; ok {
+		params.OrderDesc = form["orderdesc"][0] == "true"
+	}
+
+	return params
+}
+
+func getSearchGear(db *sql.DB, key string, form url.Values) (map[string]string, []interface{}, error) {
+	inserts := make(map[string]string)
+	var fills []interface{}
+
+	rows, err := db.Query(`
+		select name, content
+		from templatesearches
+		where path is :key;
+	`, sql.Named("key", key))
+	if err != nil {
+		log.Println(err)
+		return inserts, fills, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var name, content string
+		err = rows.Scan(&name, &content)
+		if err != nil {
+			log.Println(err)
+			return inserts, fills, err
+		}
+
+		var bundle SearchBundle
+		err = json.Unmarshal([]byte(content), &bundle)
+		if err != nil {
+			log.Println(err)
+			return inserts, fills, err
+		}
+
+		params := prepareSearchParams(form, bundle)
+
+		query, pargs := params.Prepare()
+		inserts[name] = query
+		fills = pargs
+	}
+
+	return inserts, fills, err
+}
+
+func createSuperSoftServe(db *sql.DB, key string) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		row := db.QueryRow(`
+			select
+				path,
+				method,
+				template
+			from
+				routes
+			where
+				path is :key;
+		`, sql.Named("key", key))
+
+		var path, method, templatename string
+		err := row.Scan(&path, &method, &templatename)
+		if err != nil {
+			log.Println(err)
+			fmt.Fprintf(w, "%s", err)
+			return
+		}
+
+		if strings.ToUpper(req.Method) != strings.ToUpper(method) {
+			fmt.Fprintf(w, "Expected %s, got %s", method, req.Method)
+			return
+		}
+
+		err = req.ParseForm()
+		if err != nil {
+			log.Println(err)
+			fmt.Fprintf(w, "%s", err)
+			return
+		}
+
+		td := make(map[string]interface{})
+		td["path"] = req.URL.Path
+		td["routes"] = Fastlinks
+
+		// if there's something in the search box, hold onto it
+		if _, ok := req.Form["terms"]; ok {
+			td["terms"] = strings.Join(req.Form["terms"], " ")
+		}
+
+		// search
+		inserts, fills, err := getSearchGear(db, key, req.Form)
+		if err != nil {
+			log.Println(err)
+			fmt.Fprintf(w, "%s", err)
+			return
+		}
+
+		/*
+			for k, v := range req.Form {
+				log.Printf("%s: %v\n", k, v)
+			}
+			superSet := permutations(req.Form)
+			for i, vs := range superSet {
+				log.Printf("%d\n", i)
+				for _, v := range vs {
+					log.Printf("\t%s: %v\n", v.Name, v.Value)
+				}
+			}
+
+			for k, v := range cfg.Items.Constant {
+				td[k] = v
+			}
+		*/
+
+		args := make([]any, 0, 10)
+		for k, vs := range req.Form {
+			v, err := url.QueryUnescape(vs[0])
+			if err != nil {
+				log.Println(err)
+				fmt.Fprintf(w, "%s", err)
+				return
+			}
+			//log.Printf("\t'%s':'%v'\n", k, v)
+			args = append(args, sql.Named(k, v))
+		}
+
+		for _, fill := range fills {
+			args = append(args, fill)
+		}
+
+		rows, err := db.Query(`
+			select name, content
+			from templatequeries
+			where path is :key;
+		`, sql.Named("key", key))
+		if err != nil {
+			log.Println(err)
+			fmt.Fprintf(w, "%s", err)
+			return
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var name, query string
+			err = rows.Scan(&name, &query)
+			if err != nil {
+				log.Println(err)
+				fmt.Fprintf(w, "%s", err)
+				return
+			}
+
+			for before, after := range inserts {
+				query = strings.Replace(query, fmt.Sprintf("{{%s}}", before), after, -1)
+			}
+			fill := make([][]string, 0, 100)
+
+			elems, err := runQuery(db, query, args)
+			if err != nil {
+				log.Println(err)
+				fmt.Fprintf(w, "%s", err)
+				return
+			}
+			fill = append(fill, elems...)
+
+			maxlen := 0
+			for _, xs := range fill {
+				if len(xs) > maxlen {
+					maxlen = len(xs)
+				}
+			}
+
+			if maxlen == 1 {
+				// flatten
+				squash := make([]string, 0, len(fill))
+				for _, xs := range fill {
+					squash = append(squash, xs[0])
+				}
+				td[name] = squash
+			} else {
+				td[name] = fill
+			}
+		}
+
+		tmpl, err := loadTemplate(db, templatename)
+		if err != nil {
+			log.Println(err)
+			fmt.Fprintf(w, "%s", err)
+			return
+		}
+
+		err = tmpl.Execute(w, td)
+		if err != nil {
+			log.Println(err)
+			fmt.Fprintf(w, "%s", err)
+			return
+		}
+	}
 }
 
 func emptyHandler(w http.ResponseWriter, req *http.Request) {
@@ -354,19 +575,6 @@ func createGetHandler(db *sql.DB, cfg *ConfigGet) func(http.ResponseWriter, *htt
 			return
 		}
 
-		/*
-			args := make([]any, 0, 10)
-			for k, vs := range req.Form {
-				v, err := url.QueryUnescape(vs[0])
-				if err != nil {
-					log.Println(err)
-					return
-				}
-				//log.Printf("\t'%s':'%v'\n", k, v)
-				args = append(args, sql.Named(k, v))
-			}
-		*/
-
 		td := make(map[string]interface{})
 
 		td["path"] = req.URL.Path
@@ -375,6 +583,10 @@ func createGetHandler(db *sql.DB, cfg *ConfigGet) func(http.ResponseWriter, *htt
 		if _, ok := req.Form["terms"]; ok {
 			td["terms"] = strings.Join(req.Form["terms"], " ")
 		}
+
+		inserts := make(map[string]string)
+
+		var fills []interface{}
 
 		for k, v := range cfg.Items.Search {
 			params := parseSearchTerms(req.Form[v.Arg])
@@ -410,55 +622,55 @@ func createGetHandler(db *sql.DB, cfg *ConfigGet) func(http.ResponseWriter, *htt
 				params.OrderDesc = req.Form["orderdesc"][0] == "true"
 			}
 
-			req.Form[k], err = lookup2(db, params)
+			query, pargs := params.Prepare()
+			inserts[k] = query
+			fills = pargs
+		}
+
+		/*
+			for k, v := range req.Form {
+				log.Printf("%s: %v\n", k, v)
+			}
+			superSet := permutations(req.Form)
+			for i, vs := range superSet {
+				log.Printf("%d\n", i)
+				for _, v := range vs {
+					log.Printf("\t%s: %v\n", v.Name, v.Value)
+				}
+			}
+
+			for k, v := range cfg.Items.Constant {
+				td[k] = v
+			}
+		*/
+
+		args := make([]any, 0, 10)
+		for k, vs := range req.Form {
+			v, err := url.QueryUnescape(vs[0])
 			if err != nil {
 				log.Println(err)
 				return
 			}
+			//log.Printf("\t'%s':'%v'\n", k, v)
+			args = append(args, sql.Named(k, v))
 		}
 
-		for k, v := range req.Form {
-			log.Printf("%s: %v\n", k, v)
+		for _, fill := range fills {
+			args = append(args, fill)
 		}
-		superSet := permutations(req.Form)
-		for i, vs := range superSet {
-			log.Printf("%d\n", i)
-			for _, v := range vs {
-				log.Printf("\t%s: %v\n", v.Name, v.Value)
+
+		for k, query := range cfg.Items.Query {
+			for before, after := range inserts {
+				query = strings.Replace(query, fmt.Sprintf("{{%s}}", before), after, -1)
 			}
-		}
-
-		for k, v := range cfg.Items.Constant {
-			td[k] = v
-		}
-
-		for k, v := range cfg.Items.Query {
 			fill := make([][]string, 0, 100)
 
-			if len(superSet) == 0 {
-				log.Println("No arguments codepath")
-				// argless query
-				elems, err := runQuery(db, v, []any{})
-				if err != nil {
-					log.Println(err)
-					return
-				}
-				fill = append(fill, elems...)
-			} else {
-				log.Println("Arguments codepath")
-				for _, args := range superSet {
-					shittyArgs := make([]any, 0, len(args))
-					for _, arg := range args {
-						shittyArgs = append(shittyArgs, any(arg))
-					}
-					elems, err := runQuery(db, v, shittyArgs)
-					if err != nil {
-						log.Println(err)
-						return
-					}
-					fill = append(fill, elems...)
-				}
+			elems, err := runQuery(db, query, args)
+			if err != nil {
+				log.Println(err)
+				return
 			}
+			fill = append(fill, elems...)
 
 			maxlen := 0
 			for _, xs := range fill {
@@ -493,7 +705,6 @@ func createGetHandler(db *sql.DB, cfg *ConfigGet) func(http.ResponseWriter, *htt
 	}
 }
 
-// route struct has query _> run query -> fill template with results
 func runQuery(db *sql.DB, query string, args []any) ([][]string, error) {
 	var rows *sql.Rows
 	var err error

@@ -21,6 +21,14 @@ import (
 func initDB(db *sql.DB) error {
 	log.Println("Initialising database")
 
+	// WAL creates a few secondary files but generally I like it more
+	// find it plays nicer in general with most systems
+	_, err := db.Exec("pragma journal_mode=WAL;")
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+
 	tx, err := db.Begin()
 	if err != nil {
 		log.Println(err)
@@ -71,6 +79,12 @@ func initDB(db *sql.DB) error {
 	}
 
 	err = tx.Commit()
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+
+	err = initRoutes(db)
 	if err != nil {
 		log.Println(err)
 		return err
@@ -239,6 +253,192 @@ func addFilesToDB(db *sql.DB, path string) (int, error) {
 	}
 
 	return count, nil
+}
+
+func initRoutesCore(db *sql.DB) error {
+	_, err := db.Exec(`
+		create table if not exists routes (
+			path text primary key,
+			method text,
+			alias text,
+			template text,
+			redirect text
+		);`)
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(`
+		insert or ignore into 
+		routes (path, method, alias, template, redirect)
+		values (:path, :method, :alias, :template, :redirect);
+	`)
+
+	for path, pack := range routeDefaults {
+		_, err = stmt.Exec(
+			sql.Named("path", path),
+			sql.Named("method", pack["method"]),
+			sql.Named("alias", pack["alias"]),
+			sql.Named("template", pack["template"]),
+			sql.Named("redirect", pack["redirect"]),
+		)
+		if err != nil {
+			log.Println(err)
+			return err
+		}
+	}
+
+	err = tx.Commit()
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+
+	return nil
+}
+
+func initTemplateQueries(db *sql.DB) error {
+	_, err := db.Exec(`
+		create table if not exists templatequeries (
+			path text,
+			name text,
+			content text,
+			primary key (path, name)
+		);`)
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(`
+		insert or ignore 
+		into templatequeries (path, name, content)
+		values (:path, :name, :content);
+	`)
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+	defer stmt.Close()
+
+	for routename, pack := range routeDefaultQueries {
+		for name, content := range pack {
+			_, err = stmt.Exec(
+				sql.Named("path", routename),
+				sql.Named("name", name),
+				sql.Named("content", content),
+			)
+			if err != nil {
+				log.Println(err)
+				return err
+			}
+		}
+	}
+
+	err = tx.Commit()
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+
+	return nil
+}
+
+func initTemplateSearches(db *sql.DB) error {
+	_, err := db.Exec(`
+		create table if not exists templatesearches (
+			path text,
+			name text,
+			content text,
+			primary key (path, name)
+		);`)
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(`
+		insert or ignore 
+		into templatesearches (path, name, content)
+		values (:path, :name, :content);
+	`)
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+	defer stmt.Close()
+
+	for routename, pack := range routeDefaultSearches {
+		for outname, bundle := range pack {
+			b, err := json.Marshal(bundle)
+			if err != nil {
+				log.Println(err)
+				return err
+			}
+
+			_, err = stmt.Exec(
+				sql.Named("path", routename),
+				sql.Named("name", outname),
+				sql.Named("content", string(b)),
+			)
+			if err != nil {
+				log.Println(err)
+				return err
+			}
+		}
+	}
+
+	err = tx.Commit()
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+
+	return nil
+}
+
+func initRoutes(db *sql.DB) error {
+	err := initRoutesCore(db)
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+
+	err = initTemplateQueries(db)
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+
+	err = initTemplateSearches(db)
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+
+	return nil
 }
 
 func initTemplates(db *sql.DB) error {
@@ -412,10 +612,7 @@ type SearchParameters struct {
 	OrderDesc bool
 }
 
-// This is unfortunately a SQL query string building function
-// sqlite3 FSTS didn't really fit with my table design and goals
-// FSTS could be used... but would need to create a specific FSTS table with data modified to suit it
-func lookup2(db *sql.DB, params SearchParameters) ([]string, error) {
+func (params *SearchParameters) Prepare() (string, []interface{}) {
 	// the final query is made of bricks glued together
 	// it mostly builds up a lot of subqueries
 	// sqlite3 in-built function "instr" is used a lot
@@ -428,27 +625,33 @@ func lookup2(db *sql.DB, params SearchParameters) ([]string, error) {
 	glue := "and"
 	fills := make([]interface{}, 0, 20)
 
+	paramCount := 0
+	addParam := func(v interface{}) string {
+		paramCount += 1
+		name := fmt.Sprintf("searchparam%d", paramCount)
+		fills = append(fills, sql.Named(name, v))
+		return fmt.Sprintf(":%s", name)
+	}
+
 	for _, v := range params.Vals {
 		bricks = append(bricks, glue)
-		bricks = append(bricks, `
+		bricks = append(bricks, strings.Join([]string{`
 			filename in (
 				select distinct(filename) 
 				from tags 
-				where instr(lower(val), lower(?)) > 0
-			)`)
-		fills = append(fills, v)
+				where instr(lower(val), lower(`, addParam(v), `)) > 0
+			)`}, ""))
 	}
 
 	for k, v := range params.KeyVals {
 		bricks = append(bricks, glue)
-		bricks = append(bricks, `
+		bricks = append(bricks, strings.Join([]string{`
 			filename in (
 				select filename 
 				from tags 
-				where name is ? 
-				and instr(lower(val), lower(?)) > 0
-			)`)
-		fills = append(fills, k, v)
+				where name is `, addParam(k), ` 
+				and instr(lower(val), lower(`, addParam(v), `)) > 0
+			)`}, ""))
 	}
 
 	if params.OrderBy == "time" {
@@ -466,24 +669,30 @@ func lookup2(db *sql.DB, params SearchParameters) ([]string, error) {
 	}
 
 	if params.Offset > 0 {
-		bricks = append(bricks, "offset ?")
-		fills = append(fills, params.Offset)
+		bricks = append(bricks, "offset :searchoffset")
+		fills = append(fills, sql.Named("searchoffset", params.Offset))
 	}
 
 	if params.Limit > 0 {
-		bricks = append(bricks, "limit ?")
-		fills = append(fills, params.Limit)
+		bricks = append(bricks, "limit :searchlimit")
+		fills = append(fills, sql.Named("searchlimit", params.Limit))
 	}
 
-	bricks = append(bricks, ";")
+	//bricks = append(bricks, ";")
+	return strings.Join(bricks, " "), fills
+}
 
+// This is unfortunately a SQL query string building function
+// sqlite3 FSTS didn't really fit with my table design and goals
+// FSTS could be used... but would need to create a specific FSTS table with data modified to suit it
+func lookup2(db *sql.DB, params SearchParameters) ([]string, error) {
 	rescap := params.Limit
 	if rescap == 0 {
 		rescap = 50
 	}
 	res := make([]string, 0, rescap)
 
-	query := strings.Join(bricks, " ")
+	query, fills := params.Prepare()
 	log.Printf("\n%s\n%v\n", query, fills)
 	rows, err := db.Query(query, fills...)
 	if err != nil {
@@ -659,6 +868,7 @@ func parseSearchTerms(formterms []string) SearchParameters {
 
 		basegrow := func(x int) {
 			if i > lo {
+				log.Printf("Term: %s\n", term[lo:i+x])
 				terms = append(terms, term[lo:i+x])
 			}
 			lo = i + 1
@@ -708,10 +918,11 @@ func parseSearchTerms(formterms []string) SearchParameters {
 		// using a state machine, the work loop looks so clean now
 		// but how obvious is the state machine code?
 		step := baseroller
-		for _, c := range term {
+		for idx, c := range term {
+			i = idx
 			step = step(c)
-			i++
 		}
+		i = len(term)
 		grow()
 	}
 
