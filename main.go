@@ -56,7 +56,7 @@ func main() {
 
 	http.Handle("/file/", http.StripPrefix("/file/", http.FileServer(http.Dir(pathMedia))))
 	http.HandleFunc("/tmb/", serveThumbs(db))
-	_, err = addRoutes(db)
+	err = addRoutes(db)
 	if err != nil {
 		log.Fatal(err)
 	}

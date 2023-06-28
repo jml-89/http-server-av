@@ -212,11 +212,7 @@ var starterTemplates = map[string]string{
 var routeDefaultSearches = map[string]map[string]SearchBundle{
 	"/search": {
 		"searchresults": {
-			Arg:       "terms",
-			OrderBy:   "rowid",
-			OrderDesc: true,
-			Offset:    0,
-			Limit:     50,
+			Arg: "terms",
 		},
 	},
 }
@@ -361,20 +357,34 @@ var routeDefaultQueries = map[string]map[string]string{
 	"/search": {
 		"videos": `
 			select a.filename, val 
-			from ({{searchresults}}) b 
-			join tags a 
-			on b.filename is a.filename 
-			and a.name is 'thumbname';
+			from ({{searchresults}}) a
+			where a.name is 'thumbname'
+			limit 50;
 		`,
 
 		"refinements": `
-			select word from wordassocs a 
-			join ({{searchresults}}) b 
-			on a.filename is b.filename 
-			group by a.word 
-			having count(a.word) > 5 
-			order by random() 
-			limit 10;
+			with search(filename) as (
+				select distinct(filename) 
+				from ({{searchresults}})
+			)
+			select 
+				b.word
+			from 
+				(select count(*) as cnt from search) num
+			left outer join
+				(select filename from search) a
+			join
+				wordassocs b
+			on 
+				a.filename = b.filename
+			group by 
+				b.word
+			having 
+				count(b.word) < (num.cnt/2)
+			order by
+				count(b.word) desc
+			limit 
+				10;
 		`,
 	},
 
@@ -383,7 +393,8 @@ var routeDefaultQueries = map[string]map[string]string{
 			select a.filename, a.val 
 			from favourites b join tags a 
 			on a.filename = b.filename 
-			where a.name is 'thumbname';
+			where a.name is 'thumbname'
+			order by b.rowid desc;
 		`,
 	},
 

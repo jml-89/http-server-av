@@ -500,7 +500,7 @@ func getTemplate(db *sql.DB, name string) (string, error) {
 	var raw string
 	err := row.Scan(&raw)
 	if err != nil {
-		log.Println(err)
+		log.Printf("Could not find template '%'\n", name)
 		return raw, err
 	}
 
@@ -604,12 +604,8 @@ func filesNotInDB(db *sql.DB, filenames []string) ([]string, error) {
 }
 
 type SearchParameters struct {
-	Vals      []string
-	KeyVals   map[string]string
-	Offset    int
-	Limit     int
-	OrderBy   string
-	OrderDesc bool
+	Vals    []string
+	KeyVals map[string]string
 }
 
 func (params *SearchParameters) Prepare() (string, []interface{}) {
@@ -617,12 +613,7 @@ func (params *SearchParameters) Prepare() (string, []interface{}) {
 	// it mostly builds up a lot of subqueries
 	// sqlite3 in-built function "instr" is used a lot
 	bricks := make([]string, 0, 20)
-	bricks = append(bricks, `
-		select filename
-		from tags
-		where name is 'diskfiletime'
-		`)
-	glue := "and"
+	glue := "with"
 	fills := make([]interface{}, 0, 20)
 
 	paramCount := 0
@@ -633,52 +624,50 @@ func (params *SearchParameters) Prepare() (string, []interface{}) {
 		return fmt.Sprintf(":%s", name)
 	}
 
+	searchCount := 0
+	prevSearch := "tags"
+
 	for _, v := range params.Vals {
 		bricks = append(bricks, glue)
-		bricks = append(bricks, strings.Join([]string{`
-			filename in (
-				select distinct(filename) 
-				from tags 
-				where instr(lower(val), lower(`, addParam(v), `)) > 0
-			)`}, ""))
+		glue = ","
+
+		searchName := fmt.Sprintf("search%d", searchCount)
+		bricks = append(bricks,
+			fmt.Sprintf(`%s(filename, name, val, rowid) as (
+				select filename, name, val, rowid
+				from tags
+				where filename in (
+					select distinct(filename) 
+					from %s
+					where instr(lower(val), lower(%s)) > 0
+				)
+			)`, searchName, prevSearch, addParam(v)))
+		searchCount += 1
+		prevSearch = searchName
 	}
 
 	for k, v := range params.KeyVals {
 		bricks = append(bricks, glue)
-		bricks = append(bricks, strings.Join([]string{`
-			filename in (
-				select filename 
-				from tags 
-				where name is `, addParam(k), ` 
-				and instr(lower(val), lower(`, addParam(v), `)) > 0
-			)`}, ""))
+		glue = ","
+
+		searchName := fmt.Sprintf("search%d", searchCount)
+		bricks = append(bricks,
+			fmt.Sprintf(`%s(filename, name, val, rowid) as (
+				select filename, name, val, rowid
+				from tags
+				where filename in (
+					select distinct(filename) 
+					from %s
+					where name is %s
+					and instr(lower(val), lower(%s)) > 0
+				)
+			)`, searchName, prevSearch, addParam(k), addParam(v)))
+		searchCount += 1
+		prevSearch = searchName
 	}
 
-	if params.OrderBy == "time" {
-		bricks = append(bricks, "order by val")
-		if params.OrderDesc {
-			bricks = append(bricks, "desc")
-		}
-	} else if params.OrderBy == "random" {
-		bricks = append(bricks, "order by random()")
-	} else if params.OrderBy == "rowid" {
-		bricks = append(bricks, "order by rowid")
-		if params.OrderDesc {
-			bricks = append(bricks, "desc")
-		}
-	}
+	bricks = append(bricks, fmt.Sprintf("select * from %s", prevSearch))
 
-	if params.Offset > 0 {
-		bricks = append(bricks, "offset :searchoffset")
-		fills = append(fills, sql.Named("searchoffset", params.Offset))
-	}
-
-	if params.Limit > 0 {
-		bricks = append(bricks, "limit :searchlimit")
-		fills = append(fills, sql.Named("searchlimit", params.Limit))
-	}
-
-	//bricks = append(bricks, ";")
 	return strings.Join(bricks, " "), fills
 }
 
@@ -686,11 +675,7 @@ func (params *SearchParameters) Prepare() (string, []interface{}) {
 // sqlite3 FSTS didn't really fit with my table design and goals
 // FSTS could be used... but would need to create a specific FSTS table with data modified to suit it
 func lookup2(db *sql.DB, params SearchParameters) ([]string, error) {
-	rescap := params.Limit
-	if rescap == 0 {
-		rescap = 50
-	}
-	res := make([]string, 0, rescap)
+	res := make([]string, 0, 100)
 
 	query, fills := params.Prepare()
 	log.Printf("\n%s\n%v\n", query, fills)
@@ -932,12 +917,8 @@ func parseSearchTerms(formterms []string) SearchParameters {
 	}
 
 	params := SearchParameters{
-		Vals:      make([]string, 0, 50),
-		KeyVals:   make(map[string]string),
-		OrderBy:   "random",
-		OrderDesc: false,
-		Offset:    0,
-		Limit:     50,
+		Vals:    make([]string, 0, 50),
+		KeyVals: make(map[string]string),
 	}
 
 	skip := false
