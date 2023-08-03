@@ -88,6 +88,7 @@ var starterTemplates = map[string]string{
 				<input type="submit" value="Search">
 			</form>
 
+			{{if .issearch}}
 			{{if .refinements}}
 			<h2>Refinements</h2>
 			<div id="search-refinements">
@@ -100,6 +101,7 @@ var starterTemplates = map[string]string{
 				</form>
 				{{end}}
 			</div>
+			{{end}}
 
 			<h2>Sort By</h2>
 			<div id="search-refinements">
@@ -425,6 +427,10 @@ var routeDefaultQueries = map[string]map[string]string{
 
 		"nextpagenumber": `
 			select :pagenumber + 1;
+		`,
+
+		"issearch": `
+			select 1;
 		`,
 
 		"refinements": `
