@@ -266,8 +266,13 @@ func superSoftServe(db *sql.DB, key string, w http.ResponseWriter, req *http.Req
 	td["routes"] = Fastlinks
 
 	// if there's something in the search box, hold onto it
-	if _, ok := req.Form["terms"]; ok {
-		td["terms"] = strings.Join(req.Form["terms"], " ")
+	//if _, ok := req.Form["terms"]; ok {
+	//	td["terms"] = strings.Join(req.Form["terms"], " ")
+	//}
+
+	// search terms, sort order, page number, and so on
+	for k, vs := range req.Form {
+		td[k] = strings.Join(vs, " ")
 	}
 
 	// results by default returns an array of string arrays

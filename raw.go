@@ -83,14 +83,49 @@ var starterTemplates = map[string]string{
 
 			<form id="search-area" action="/search" method="get">
 				<input type="text" name="terms" id="search-terms" value="{{.terms}}" required>
+				<input type="hidden" name="sortorder" id="sort-order" value="diskfilename">
+				<input type="hidden" name="pagenumber" id="page-number" value="0">
 				<input type="submit" value="Search">
 			</form>
 
 			{{if .refinements}}
+			<h2>Refinements</h2>
 			<div id="search-refinements">
 				{{range $i, $e := .refinements}}
-				<a href="/search?terms={{$.terms}} {{$e}}">{{$e}}</a>
+				<form action="/search" method="get">
+					<input type="hidden" name="terms" value="{{$.terms}} {{$e}}" required>
+					<input type="hidden" name="sortorder" value="{{$.sortorder}}">
+					<input type="hidden" name="pagenumber" value="{{$.pagenumber}}">
+					<input type="submit" value="{{$e}}">
+				</form>
 				{{end}}
+			</div>
+
+			<h2>Sort By</h2>
+			<div id="search-refinements">
+				<form action="/search" method="get">
+					<input type="hidden" name="terms" value="{{$.terms}}" required>
+					<input type="hidden" name="sortorder" value="diskfilename">
+					<input type="hidden" name="pagenumber" value="0">
+					<input type="submit" value="Filename">
+				</form>
+
+				<form action="/search" method="get">
+					<input type="hidden" name="terms" value="{{$.terms}}" required>
+					<input type="hidden" name="sortorder" value="diskfiletime">
+					<input type="hidden" name="pagenumber" value="0">
+					<input type="submit" value="Date/Time">
+				</form>
+			</div>
+
+			<h2>Page</h2>
+			<div id="search-refinements">
+				<form action="/search" method="get">
+					<input type="hidden" name="terms" value="{{$.terms}}" required>
+					<input type="hidden" name="sortorder" value="{{$.sortorder}}">
+					<input type="hidden" name="pagenumber" value="{{index $.nextpagenumber 0}}">
+					<input type="submit" value="Next">
+				</form>
 			</div>
 			{{end}}
 		</div>
@@ -325,6 +360,23 @@ var routeDefaultQueries = map[string]map[string]string{
 				limit 25
 			);
 		`,
+
+		"refinements": `
+			with count(word, count) as (
+				select word, count(word)
+				from wordassocs
+				group by word
+			)
+			select a.word
+			from wordassocs a
+			join count b
+			on a.filename = :filename
+			and a.word = b.word
+			group by a.word
+			having b.count < 50
+			order by b.count desc
+			limit 10;
+		`,
 	},
 
 	"/templates/": {
@@ -356,10 +408,23 @@ var routeDefaultQueries = map[string]map[string]string{
 
 	"/search": {
 		"videos": `
-			select a.filename, val 
-			from ({{searchresults}}) a
-			where a.name is 'thumbname'
-			limit 50;
+			with unsorted(filename, criteria) as (
+				select filename, val
+				from ({{searchresults}})
+				where name is :sortorder
+			)
+			select b.filename, b.val 
+			from unsorted a
+			join tags b
+			on a.filename = b.filename
+			and b.name is 'thumbname'
+			order by a.criteria
+			limit 50
+			offset :pagenumber * 50;
+		`,
+
+		"nextpagenumber": `
+			select :pagenumber + 1;
 		`,
 
 		"refinements": `
