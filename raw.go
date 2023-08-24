@@ -118,6 +118,20 @@ var starterTemplates = map[string]string{
 					<input type="hidden" name="pagenumber" value="0">
 					<input type="submit" value="Date/Time">
 				</form>
+
+				<form action="/search" method="get">
+					<input type="hidden" name="terms" value="{{$.terms}}" required>
+					<input type="hidden" name="sortorder" value="duration">
+					<input type="hidden" name="pagenumber" value="0">
+					<input type="submit" value="Duration">
+				</form>
+
+				<form action="/search" method="get">
+					<input type="hidden" name="terms" value="{{$.terms}}" required>
+					<input type="hidden" name="sortorder" value="diskfilesize">
+					<input type="hidden" name="pagenumber" value="0">
+					<input type="submit" value="Filesize">
+				</form>
 			</div>
 
 			<h2>Page</h2>

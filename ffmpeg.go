@@ -73,6 +73,8 @@ func GetMetadata(path string) (map[string]string, error) {
 		res[C.GoString(tag.key)] = C.GoString(tag.value)
 	}
 
+	res["duration"] = fmt.Sprintf("%099d", avctx.duration / C.AV_TIME_BASE)
+
 	return res, nil
 }
 
