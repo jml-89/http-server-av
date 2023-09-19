@@ -12,6 +12,7 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 	"os"
+	"os/signal"
 	"path/filepath"
 )
 
@@ -86,7 +87,15 @@ func main() {
 		log.Fatal(err)
 	}
 
-	_ = <-done
+	terminate := make(chan os.Signal)
+	signal.Notify(terminate, os.Interrupt)
+
+	select {
+	case _ = <-done:
+		log.Println("HTTP server terminated, quitting...")
+	case _ = <-terminate:
+		log.Println("SIGINT received, quitting...")
+	}
 
 	return
 }

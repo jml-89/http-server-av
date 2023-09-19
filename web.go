@@ -101,6 +101,20 @@ func loadTemplate(db *sql.DB, name string) (*template.Template, error) {
 	// Can be addressed by explicitly using the pertinent functions
 	fns["escapequery"] = template.URLQueryEscaper
 	fns["escapepath"] = url.PathEscape
+	fns["prettyprint"] = func(s string) string {
+		s = strings.Map(func(r rune) rune {
+			switch r {
+			case '-':
+				return ' '
+			case '_':
+				return ' '
+			}
+			return r
+		}, s)
+		parts := strings.Split(s, ".")
+		s = strings.Join(parts[:len(parts)-1], ".")
+		return s
+	}
 	tmpl := template.Must(template.New("base").Parse(string(rawBase)))
 	template.Must(tmpl.New("body").Funcs(fns).Parse(string(rawTmpl)))
 

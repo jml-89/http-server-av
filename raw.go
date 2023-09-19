@@ -83,7 +83,8 @@ var starterTemplates = map[string]string{
 
 			<form id="search-area" action="/search" method="get">
 				<input type="text" name="terms" id="search-terms" value="{{.terms}}" required>
-				<input type="hidden" name="sortorder" id="sort-order" value="diskfilename">
+				<input type="hidden" name="sortcriteria" id="sort-criteria" value="diskfilename">
+				<input type="hidden" name="sortorder" id="sort-order" value="desc">
 				<input type="hidden" name="pagenumber" id="page-number" value="0">
 				<input type="submit" value="Search">
 			</form>
@@ -95,7 +96,8 @@ var starterTemplates = map[string]string{
 				{{range $i, $e := .refinements}}
 				<form action="/search" method="get">
 					<input type="hidden" name="terms" value="{{$.terms}} {{$e}}" required>
-					<input type="hidden" name="sortorder" value="{{$.sortorder}}">
+					<input type="hidden" name="sortcriteria" value="{{$.sortcriteria}}">
+					<input type="hidden" name="sortorder" id="sort-order" value="desc">
 					<input type="hidden" name="pagenumber" value="{{$.pagenumber}}">
 					<input type="submit" value="{{$e}}">
 				</form>
@@ -107,38 +109,71 @@ var starterTemplates = map[string]string{
 			<div id="search-refinements">
 				<form action="/search" method="get">
 					<input type="hidden" name="terms" value="{{$.terms}}" required>
-					<input type="hidden" name="sortorder" value="diskfilename">
+					<input type="hidden" name="sortcriteria" value="diskfilename">
+					<input type="hidden" name="sortorder" id="sort-order" value="desc">
 					<input type="hidden" name="pagenumber" value="0">
 					<input type="submit" value="Filename">
 				</form>
 
 				<form action="/search" method="get">
 					<input type="hidden" name="terms" value="{{$.terms}}" required>
-					<input type="hidden" name="sortorder" value="diskfiletime">
+					<input type="hidden" name="sortcriteria" value="diskfiletime">
+					<input type="hidden" name="sortorder" id="sort-order" value="desc">
 					<input type="hidden" name="pagenumber" value="0">
 					<input type="submit" value="Date/Time">
 				</form>
 
 				<form action="/search" method="get">
 					<input type="hidden" name="terms" value="{{$.terms}}" required>
-					<input type="hidden" name="sortorder" value="duration">
+					<input type="hidden" name="sortcriteria" value="duration">
+					<input type="hidden" name="sortorder" id="sort-order" value="desc">
 					<input type="hidden" name="pagenumber" value="0">
 					<input type="submit" value="Duration">
 				</form>
 
 				<form action="/search" method="get">
 					<input type="hidden" name="terms" value="{{$.terms}}" required>
-					<input type="hidden" name="sortorder" value="diskfilesize">
+					<input type="hidden" name="sortcriteria" value="diskfilesize">
+					<input type="hidden" name="sortorder" id="sort-order" value="desc">
 					<input type="hidden" name="pagenumber" value="0">
 					<input type="submit" value="Filesize">
 				</form>
 			</div>
 
+			<h2>Sort Order</h2>
+			<div id="search-refinements">
+				<form action="/search" method="get">
+					<input type="hidden" name="terms" value="{{$.terms}}" required>
+					<input type="hidden" name="sortcriteria" value="{{$.sortcriteria}}">
+					<input type="hidden" name="sortorder" id="sort-order" value="asc">
+					<input type="hidden" name="pagenumber" value="0">
+					<input type="submit" value="Ascending">
+				</form>
+
+				<form action="/search" method="get">
+					<input type="hidden" name="terms" value="{{$.terms}}" required>
+					<input type="hidden" name="sortcriteria" value="{{$.sortcriteria}}">
+					<input type="hidden" name="sortorder" id="sort-order" value="desc">
+					<input type="hidden" name="pagenumber" value="0">
+					<input type="submit" value="Descending">
+				</form>
+
+				<form action="/search" method="get">
+					<input type="hidden" name="terms" value="{{$.terms}}" required>
+					<input type="hidden" name="sortcriteria" value="{{$.sortcriteria}}">
+					<input type="hidden" name="sortorder" id="sort-order" value="random">
+					<input type="hidden" name="pagenumber" value="0">
+					<input type="submit" value="Random">
+				</form>
+			</div>
+
+
 			<h2>Page</h2>
 			<div id="search-refinements">
 				<form action="/search" method="get">
 					<input type="hidden" name="terms" value="{{$.terms}}" required>
-					<input type="hidden" name="sortorder" value="{{$.sortorder}}">
+					<input type="hidden" name="sortcriteria" value="{{$.sortcriteria}}">
+					<input type="hidden" name="sortorder" id="sort-order" value="desc">
 					<input type="hidden" name="pagenumber" value="{{index $.nextpagenumber 0}}">
 					<input type="submit" value="Next">
 				</form>
@@ -164,10 +199,14 @@ var starterTemplates = map[string]string{
 `,
 	"video": `
 <div>
+	{{if .duration}}
 	<video controls>
 		<source src="/file/{{index .filename 0 | escapepath}}">
 		<a href="/file/{{index .filename 0 | escapepath}}">Download</a>
 	</video>
+	{{else}}
+	<img src="/file/{{index .filename 0 | escapepath}}"/>
+	{{end}}
 
 	<div id="video-description">
 		<h1>{{if .title}}{{index .title 0}}{{else}}{{index .filename 0}}{{end}}</h1>
@@ -201,7 +240,7 @@ var starterTemplates = map[string]string{
 
 	<h1>Related Videos</h1>
 	<ol>{{range $k, $vs := .related}}
-		<li><a href="/watch?filename={{index $vs 0 | escapequery}}"><img src="/tmb/{{index $vs 1 | escapepath}}"/><h2>{{index $vs 0}}</h2></a></li>
+		<li><a href="/watch?filename={{index $vs 0 | escapequery}}"><img src="/tmb/{{index $vs 1 | escapepath}}"/><h2>{{index $vs 0 | prettyprint}}</h2></a></li>
 	{{end}}</ol>
 </div>
 `,
@@ -210,7 +249,7 @@ var starterTemplates = map[string]string{
 {{range $idx, $elem := .videos}}
 	<div class="media-item">
 		<a href="/watch?filename={{index $elem 0 | escapequery}}{{if $.terms}}&terms={{$.terms}}{{end}}"><img src="/tmb/{{index $elem 1 | escapepath}}"/>
-		<h2>{{index $elem 0}}</h2></a>
+		<h2>{{index $elem 0 | prettyprint}}</h2></a>
 	</div>
 {{end}}
 </div>
@@ -327,6 +366,13 @@ var routeDefaultQueries = map[string]map[string]string{
 			and name is 'title';
 		`,
 
+		"duration": `
+			select val 
+			from tags 
+			where filename is :filename 
+			and name is 'duration';
+		`,
+
 		"artist": `
 			select val 
 			from tags 
@@ -427,14 +473,17 @@ var routeDefaultQueries = map[string]map[string]string{
 			with unsorted(filename, criteria) as (
 				select filename, val
 				from ({{searchresults}})
-				where name is :sortorder
+				where name is :sortcriteria
 			)
 			select b.filename, b.val 
 			from unsorted a
 			join tags b
 			on a.filename = b.filename
 			and b.name is 'thumbname'
-			order by a.criteria
+			order by 
+				case when :sortorder is 'desc' then a.criteria end desc, 
+				case when :sortorder is 'asc' then a.criteria end asc, 
+				case when :sortorder is 'random' then random() end 
 			limit 50
 			offset :pagenumber * 50;
 		`,

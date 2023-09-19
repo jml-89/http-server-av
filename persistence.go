@@ -23,7 +23,7 @@ func initDB(db *sql.DB) error {
 
 	// WAL creates a few secondary files but generally I like it more
 	// find it plays nicer in general with most systems
-	_, err := db.Exec("pragma journal_mode=WAL;")
+	_, err := db.Exec("pragma journal_mode = wal;")
 	if err != nil {
 		log.Println(err)
 		return err
@@ -137,6 +137,35 @@ func initRest(db *sql.DB) error {
 	return nil
 }
 
+var errNotMediaFile = errors.New("File is not an image or video")
+
+func checkFile(filename string) ([]byte, map[string]string, error) {
+	thumbnail, err := CreateThumbnail(filename)
+	if err != nil {
+		return thumbnail, nil, errNotMediaFile
+	}
+
+	metadata, err := GetMetadata(filename)
+	if err != nil {
+		log.Println(err)
+		return thumbnail, metadata, err
+	}
+
+	info, err := os.Stat(filename)
+	if err != nil {
+		log.Println(err)
+		return thumbnail, metadata, err
+	}
+
+	metadata["diskfiletime"] = info.ModTime().UTC().Format("2006-01-02T15:04:05")
+	metadata["diskfilename"] = filename
+	metadata["diskfilesize"] = fmt.Sprintf("%099d", info.Size())
+	thumbname := fmt.Sprintf("%s.webp", filename)
+	metadata["thumbname"] = thumbname
+
+	return thumbnail, metadata, nil
+}
+
 func addFileToDB(db *sql.DB, filename string) (bool, error) {
 	// This is a bit of handwave
 	// it's possibly the file is earnestly a media file but an error occurs anyway
@@ -225,6 +254,59 @@ func addFileToDB(db *sql.DB, filename string) (bool, error) {
 	return true, nil
 }
 
+func insertMedia(db *sql.DB, thumbnail []byte, metadata map[string]string) error {
+	tx, err := db.Begin()
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+	defer tx.Rollback()
+
+	stmtThumb, err := tx.Prepare(`
+		insert or replace into 
+			thumbnails (filename, image) 
+			    values (       ?,     ?);
+		`)
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+	defer stmtThumb.Close()
+
+	stmtMetadata, err := tx.Prepare(`
+		insert or replace into 
+			  tags (filename, name, val) 
+			values (       ?,    ?,   ?);
+		`)
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+	defer stmtMetadata.Close()
+
+	_, err = stmtThumb.Exec(metadata["thumbname"], thumbnail)
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+
+	for k, v := range metadata {
+		_, err = stmtMetadata.Exec(metadata["diskfilename"], k, v)
+		if err != nil {
+			log.Println(err)
+			return err
+		}
+	}
+
+	err = tx.Commit()
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+
+	return nil
+}
+
 func addFilesToDB(db *sql.DB, path string) (int, error) {
 	count := 0
 
@@ -242,18 +324,92 @@ func addFilesToDB(db *sql.DB, path string) (int, error) {
 	}
 	log.Printf("%v files have not been checked previously\n", len(filenames))
 
-	for _, filename := range filenames {
-		ok, err := addFileToDB(db, filename)
-		if err != nil {
-			return count, err
-		}
-		if ok {
-			count++
-		}
-
+	type Reply struct {
+		thumbnail []byte
+		metadata  map[string]string
+		err       error
 	}
 
-	return count, nil
+	type Request struct {
+		stop     bool
+		filename string
+		respond  chan<- Reply
+	}
+
+	replies := make(chan Reply)
+	requests := make(chan Request)
+
+	worker := func() {
+		for {
+			select {
+			case req := <-requests:
+				if req.stop {
+					return
+				}
+				tmb, mt, err := checkFile(req.filename)
+				req.respond <- Reply{thumbnail: tmb, metadata: mt, err: err}
+			}
+		}
+	}
+
+	workerCount := 4
+	log.Printf("Launching %d goroutines to process media files", workerCount)
+	for i := 0; i < workerCount; i++ {
+		go worker()
+	}
+
+	log.Printf("Processing files with %d worker routines\n", workerCount)
+
+	inFlight := 0
+	for i := 0; i < len(filenames); {
+		select {
+		case reply := <-replies:
+			inFlight--
+			if reply.err != nil {
+				if reply.err == errNotMediaFile {
+					continue
+				}
+				err = reply.err
+				break
+			}
+
+			err = insertMedia(db, reply.thumbnail, reply.metadata)
+			if err != nil {
+				break
+			}
+			count++
+
+		case requests <- Request{stop: false, filename: filenames[i], respond: replies}:
+			inFlight++
+			_, err := db.Exec("insert into checked (filename) values (?);", filenames[i])
+			if err != nil {
+				break
+			}
+			i++
+		}
+	}
+
+	log.Println("Files processed, cleaning up...")
+
+	for inFlight > 0 {
+		reply := <-replies
+		inFlight--
+		if reply.err != nil {
+			if reply.err == errNotMediaFile {
+				continue
+			}
+			err = reply.err
+			break
+		}
+
+		err = insertMedia(db, reply.thumbnail, reply.metadata)
+		if err != nil {
+			break
+		}
+		count++
+	}
+
+	return count, err
 }
 
 func initRoutesCore(db *sql.DB) error {

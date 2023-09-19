@@ -73,7 +73,14 @@ func GetMetadata(path string) (map[string]string, error) {
 		res[C.GoString(tag.key)] = C.GoString(tag.value)
 	}
 
-	res["duration"] = fmt.Sprintf("%099d", avctx.duration / C.AV_TIME_BASE)
+	ts := avctx.duration / C.AV_TIME_BASE
+	if ts > 0 {
+		tm := ts / 60
+		th := tm / 60
+		td := th / 24
+
+		res["duration"] = fmt.Sprintf("%02d:%02d:%02d:%02d", td, th%24, tm%60, ts%60)
+	}
 
 	return res, nil
 }
@@ -364,7 +371,8 @@ func CreateThumbnail(pathIn string) ([]byte, error) {
 	// Some streams don't support seeking
 	// In this case just do a thumbnail of the first frame
 	// Better than nothing... I guess
-	if errors.Is(err, errSeekFailed) {
+	if errors.Is(err, errSeekFailed) || fmt.Sprintf("%s", err) == "End of file" {
+		log.Println("Attempting to generate thumbnail without seeking first")
 		b, err = CreateThumbnailX(pathIn, false)
 	}
 	return b, err
