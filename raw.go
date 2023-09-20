@@ -240,7 +240,7 @@ var starterTemplates = map[string]string{
 
 	<h1>Related Videos</h1>
 	<ol>{{range $k, $vs := .related}}
-		<li><a href="/watch?filename={{index $vs 0 | escapequery}}"><img src="/tmb/{{index $vs 1 | escapepath}}"/><h2>{{index $vs 0 | prettyprint}}</h2></a></li>
+		<li><a href="/watch?filename={{index $vs 0 | escapequery}}"><img src="/tmb/{{index $vs 1 | escapepath}}"/><h2>{{index $vs 0 | prettyprint}}</h2></a><h3>{{index $vs 2}}</h3></li>
 	{{end}}</ol>
 </div>
 `,
@@ -393,51 +393,58 @@ var routeDefaultQueries = map[string]map[string]string{
 		`,
 
 		"related": `
-			with countword(filename, num) as (
-				select filename, count(*)
-				from wordassocs
-				group by filename
-			), related(filename, score) as (
+			with wordcount(filename, num) as (
+				select 
+					filename, count(*)
+				from 
+					wordassocs
+				group by 
+					filename
+			), wordlist(word) as (
+				select 
+					word
+				from 
+					wordassocs
+				where 
+					filename is :filename
+			), related(filename, commoncount) as (
 				select 
 					a.filename, 
 					count(*)
-				from wordassocs a
-				where a.word in (
-					select word
-					from wordassocs
-					where filename is :filename
-				)
-				and a.filename is not :filename
-				group by a.filename having count(*) > 0
+				from 
+					wordassocs a
+				where 
+					a.filename is not :filename
+					and a.word in wordlist
+				group by 
+					a.filename 
+				having 
+					count(*) > 0
+			), scored(filename, leftcount, rightcount, commoncount) as (
+				select 
+					a.filename,
+					(select num from wordcount where filename is :filename),
+					(select num from wordcount where filename is a.filename),
+					a.commoncount
+				from 
+					related a
+			), stage2(filename, thumb, score) as (
+				select 
+					a.filename,
+					(select val from tags where name is 'thumbname' and filename is a.filename),
+					(a.commoncount * 200) / (a.leftcount + a.rightcount)
+				from 
+					scored a
 			)
-			select filename, val 
-			from tags
-			where name is 'thumbname'
-			and filename in (
-				select a.filename
-				from (select * from countword where filename is :filename) c
-				left outer join related a
-				join countword b on a.filename is b.filename
-				order by (a.score * 200) / (b.num + c.num) desc
-				limit 25
-			);
-		`,
-
-		"refinements": `
-			with count(word, count) as (
-				select word, count(word)
-				from wordassocs
-				group by word
-			)
-			select a.word
-			from wordassocs a
-			join count b
-			on a.filename = :filename
-			and a.word = b.word
-			group by a.word
-			having b.count < 50
-			order by b.count desc
-			limit 10;
+			select 
+				filename, thumb, score
+			from 
+				stage2
+			order by
+				score desc 
+			limit
+				25
+			;
 		`,
 	},
 
