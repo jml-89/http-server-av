@@ -41,20 +41,13 @@ import (
 	"unsafe"
 )
 
-func Say() {
-	s := C.CString("Hello World!\n")
-	defer C.free(unsafe.Pointer(s))
-	C.puts(s)
-}
-
 func GetMetadata(path string) (map[string]string, error) {
 	res := make(map[string]string)
-
-	var avctx *C.AVFormatContext = nil
 
 	cpath := C.CString(path)
 	defer C.free(unsafe.Pointer(cpath))
 
+	var avctx *C.AVFormatContext = nil
 	err := avop(C.avformat_open_input(&avctx, cpath, nil, nil))
 	if err != nil {
 		return res, err
@@ -73,19 +66,32 @@ func GetMetadata(path string) (map[string]string, error) {
 		res[C.GoString(tag.key)] = C.GoString(tag.value)
 	}
 
+	for i := C.uint(0); i < avctx.nb_streams; i++ {
+		s := C.get_nth_stream(avctx, i)
+		if s.codecpar.codec_type == C.AVMEDIA_TYPE_VIDEO {
+			res["mediatype"] = "video"
+			break
+		}
+
+		if s.codecpar.codec_type == C.AVMEDIA_TYPE_AUDIO {
+			res["mediatype"] = "audio"
+		}
+	}
+
 	ts := avctx.duration / C.AV_TIME_BASE
 	if ts > 0 {
 		tm := ts / 60
 		th := tm / 60
 		td := th / 24
-
 		res["duration"] = fmt.Sprintf("%02d:%02d:%02d:%02d", td, th%24, tm%60, ts%60)
+	} else if res["mediatype"] == "video" {
+		res["mediatype"] = "image"
 	}
 
 	return res, nil
 }
 
-func CreateEncoderWEBP(dctx *C.AVCodecContext, pathOut string) (*C.AVFormatContext, *C.AVCodecContext, error) {
+func CreateEncoderWEBP(width, height int, pathOut string) (*C.AVFormatContext, *C.AVCodecContext, error) {
 	var octx *C.AVFormatContext = nil
 	var ectx *C.AVCodecContext = nil
 
@@ -115,12 +121,8 @@ func CreateEncoderWEBP(dctx *C.AVCodecContext, pathOut string) (*C.AVFormatConte
 		return nil, nil, errors.New("Failed to create encoder context")
 	}
 
-	h := C.double(540.0)
-	ratio := h / (C.double)(dctx.height)
-	w := (C.double)(dctx.width) * ratio
-
-	ectx.width = (C.int)(w)
-	ectx.height = (C.int)(h)
+	ectx.width = (C.int)(width)
+	ectx.height = (C.int)(height)
 
 	pixi := C.get_pix_fmt(enc.pix_fmts, C.AV_PIX_FMT_YUV420P)
 	if pixi == -1 {
@@ -167,126 +169,90 @@ func CreateEncoderWEBP(dctx *C.AVCodecContext, pathOut string) (*C.AVFormatConte
 	return octx, ectx, nil
 }
 
-func CreateEncoderJPG(dctx *C.AVCodecContext, pathOut string) (*C.AVFormatContext, *C.AVCodecContext, error) {
-	var octx *C.AVFormatContext = nil
-	var ectx *C.AVCodecContext = nil
+// Adds a filter to a graph and (somewhat) hides the C string management issue
+func createFilter(id, filter, args string, graph *C.AVFilterGraph) (*C.AVFilterContext, error) {
+	filterC := C.CString(filter)
+	defer C.free(unsafe.Pointer(filterC))
 
-	cfmt := C.CString("mjpeg")
-	defer C.free(unsafe.Pointer(cfmt))
+	nameC := C.CString(id)
+	defer C.free(unsafe.Pointer(nameC))
 
-	err := avop(C.avformat_alloc_output_context2(&octx, nil, cfmt, nil))
+	argsC := C.CString(args)
+	defer C.free(unsafe.Pointer(argsC))
+
+	f := C.avfilter_get_by_name(filterC)
+	if f == nil {
+		return nil, errors.New(fmt.Sprintf("Filter '%s' not found", filter))
+	}
+
+	var ctx *C.AVFilterContext = nil
+	err := avop(C.avfilter_graph_create_filter(&ctx, f, nameC, argsC, nil, graph))
 	if err != nil {
-		return nil, nil, err
+		return ctx, err
 	}
 
-	os := C.avformat_new_stream(octx, nil)
-	if os == nil {
-		C.avformat_free_context(octx)
-		return nil, nil, errors.New("Failed to create stream")
-	}
-
-	enc := C.avcodec_find_encoder(C.AV_CODEC_ID_MJPEG)
-	if enc == nil {
-		C.avformat_free_context(octx)
-		return nil, nil, errors.New("Failed to find JPEG encoder!")
-	}
-
-	ectx = C.avcodec_alloc_context3(enc)
-	if ectx == nil {
-		C.avformat_free_context(octx)
-		return nil, nil, errors.New("Failed to create encoder context")
-	}
-
-	h := C.double(360.0)
-	ratio := h / (C.double)(dctx.height)
-	w := (C.double)(dctx.width) * ratio
-
-	ectx.width = (C.int)(w)
-	ectx.height = (C.int)(h)
-
-	pixi := C.get_pix_fmt(enc.pix_fmts, C.AV_PIX_FMT_YUVJ420P)
-	if pixi == -1 {
-		C.avcodec_free_context(&ectx)
-		C.avformat_free_context(octx)
-		return nil, nil, errors.New("Failed to find preferred pixel format")
-	}
-
-	ectx.pix_fmt = C.AV_PIX_FMT_YUVJ420P
-
-	ectx.time_base.num = 1
-	ectx.time_base.den = 1
-
-	err = avop(C.avcodec_open2(ectx, enc, nil))
-	if err != nil {
-		C.avcodec_free_context(&ectx)
-		C.avformat_free_context(octx)
-		return nil, nil, err
-	}
-
-	err = avop(C.avcodec_parameters_from_context(os.codecpar, ectx))
-	if err != nil {
-		C.avcodec_free_context(&ectx)
-		C.avformat_free_context(octx)
-		return nil, nil, err
-	}
-
-	pathTmp := C.CString(pathOut)
-	defer C.free(unsafe.Pointer(pathTmp))
-	err = avop(C.avio_open(&octx.pb, pathTmp, C.AVIO_FLAG_WRITE))
-	if err != nil {
-		C.avcodec_free_context(&ectx)
-		C.avformat_free_context(octx)
-		return nil, nil, err
-	}
-
-	err = avop(C.avformat_write_header(octx, nil))
-	if err != nil {
-		C.avcodec_free_context(&ectx)
-		C.avformat_free_context(octx)
-		return nil, nil, err
-	}
-
-	return octx, ectx, nil
+	return ctx, err
 }
 
-func InitFilters(ctxEnc, ctxDec *C.AVCodecContext) (*C.AVFilterGraph, *C.AVFilterContext, *C.AVFilterContext, error) {
-	nameSrc := C.CString("buffer")
-	defer C.free(unsafe.Pointer(nameSrc))
 
-	nameSnk := C.CString("buffersink")
-	defer C.free(unsafe.Pointer(nameSnk))
-
-	src := C.avfilter_get_by_name(nameSrc)
-	snk := C.avfilter_get_by_name(nameSnk)
-
-	fos := C.avfilter_inout_alloc()
-	fis := C.avfilter_inout_alloc()
-
-	var ctxSrc *C.AVFilterContext = nil
-	var ctxSnk *C.AVFilterContext = nil
-
+func InitFiltersTestImage(imgW, imgH int) (*C.AVFilterGraph, *C.AVFilterContext, error) {
 	graph := C.avfilter_graph_alloc()
 
-	canvas := fmt.Sprintf("video_size=%dx%d:pix_fmt=%d:time_base=30001/1:pixel_aspect=1/1",
-		ctxDec.width, ctxDec.height, ctxDec.pix_fmt)
-	//log.Printf("%s\n", canvas)
-
-	canvasArg := C.CString(canvas)
-	defer C.free(unsafe.Pointer(canvasArg))
-
-	argIn := C.CString("in")
-	defer C.free(unsafe.Pointer(argIn))
-
-	argOut := C.CString("out")
-	defer C.free(unsafe.Pointer(argOut))
-
-	err := avop(C.avfilter_graph_create_filter(&ctxSrc, src, argIn, canvasArg, nil, graph))
+	ctxSrc, err := createFilter("in", "pal75bars", fmt.Sprintf("size=%dx%d", imgW, imgH), graph)
 	if err != nil {
+		log.Printf("%s\n", err)
+		return nil, nil, err
+	}
+
+	ctxSnk, err := createFilter("out", "buffersink", "", graph)
+	if err != nil {
+		log.Printf("%s\n", err)
+		return nil, nil, err
+	}
+
+	err = avop(C.avfilter_link(ctxSrc, 0, ctxSnk, 0))
+	if err != nil {
+		log.Printf("%s\n", err)
+		return nil, nil, err
+	}
+
+	err = avop(C.avfilter_graph_config(graph, nil))
+	if err != nil {
+		log.Printf("%s\n", err)
+		return nil, nil, err
+	}
+
+	return graph, ctxSnk, nil
+}
+
+func InitFiltersScaling(ctxEnc, ctxDec *C.AVCodecContext) (*C.AVFilterGraph, *C.AVFilterContext, *C.AVFilterContext, error) {
+	graph := C.avfilter_graph_alloc()
+	ctxSrc, err := createFilter(
+		"in",
+		"buffer", 
+		fmt.Sprintf("video_size=%dx%d:pix_fmt=%d:time_base=30001/1:pixel_aspect=1/1",
+			ctxDec.width, ctxDec.height, ctxDec.pix_fmt),
+		graph)
+	ctxSnk, err := createFilter(
+		"out",
+		"buffersink",
+		"",
+		graph)
+	ctxScale, err := createFilter(
+		"scale",
+		"scale",
+		fmt.Sprintf("h=%d:w=-1", ctxEnc.height),
+		graph)
+
+	err = avop(C.avfilter_link(ctxSrc, 0, ctxScale, 0))
+	if err != nil {
+		log.Printf("%s\n", err)
 		return nil, nil, nil, err
 	}
 
-	err = avop(C.avfilter_graph_create_filter(&ctxSnk, snk, argOut, nil, nil, graph))
+	err = avop(C.avfilter_link(ctxScale, 0, ctxSnk, 0))
 	if err != nil {
+		log.Printf("%s\n", err)
 		return nil, nil, nil, err
 	}
 
@@ -298,56 +264,28 @@ func InitFilters(ctxEnc, ctxDec *C.AVCodecContext) (*C.AVFilterGraph, *C.AVFilte
 		(*C.uint8_t)(unsafe.Pointer(&ctxEnc.pix_fmt)), C.sizeof_int,
 		C.AV_OPT_SEARCH_CHILDREN))
 	if err != nil {
-		return nil, nil, nil, err
-	}
-
-	fos.name = C.av_strdup(argIn)
-	fos.filter_ctx = ctxSrc
-	fos.pad_idx = 0
-	fos.next = nil
-
-	fis.name = C.av_strdup(argOut)
-	fis.filter_ctx = ctxSnk
-	fis.pad_idx = 0
-	fis.next = nil
-
-	spec := fmt.Sprintf("scale=h=%d:w=-1", ctxEnc.height)
-	specArg := C.CString(spec)
-	defer C.free(unsafe.Pointer(specArg))
-
-	err = avop(C.avfilter_graph_parse_ptr(graph, specArg, &fis, &fos, nil))
-	if err != nil {
+		log.Println(err)
 		return nil, nil, nil, err
 	}
 
 	err = avop(C.avfilter_graph_config(graph, nil))
 	if err != nil {
+		log.Println(err)
 		return nil, nil, nil, err
 	}
 
 	return graph, ctxSrc, ctxSnk, nil
 }
 
-func OpenVideoStream(ctxFmt *C.AVFormatContext) (C.uint, *C.AVCodecContext, error) {
-	streamFound := false
-	idxStream := C.uint(0)
-	for i := C.uint(0); i < ctxFmt.nb_streams; i++ {
-		if C.get_nth_stream(ctxFmt, i).codecpar.codec_type == C.AVMEDIA_TYPE_VIDEO {
-			streamFound = true
-			idxStream = i
-			break
-		}
+func OpenBestStream(ctxFmt *C.AVFormatContext, avtype int32) (C.uint, *C.AVCodecContext, error) {
+	var decoder *C.AVCodec = nil
+	is := C.av_find_best_stream(ctxFmt, avtype, -1, -1, &decoder, 0)
+	if is < 0 {
+		return 0, nil, errors.New("No best stream found")
 	}
-
-	if !streamFound {
-		return idxStream, nil, errors.New("No video stream found")
-	}
+	idxStream := C.uint(is)
 
 	stream := C.get_nth_stream(ctxFmt, idxStream)
-	decoder := C.avcodec_find_decoder(stream.codecpar.codec_id)
-	if decoder == nil {
-		return idxStream, nil, errors.New("Could not find decoder")
-	}
 
 	ctxDec := C.avcodec_alloc_context3(decoder)
 	err := avop(C.avcodec_parameters_to_context(ctxDec, stream.codecpar))
@@ -370,17 +308,111 @@ func CreateThumbnail(pathIn string) ([]byte, error) {
 
 	// Some streams don't support seeking
 	// In this case just do a thumbnail of the first frame
-	// Better than nothing... I guess
+	// Better than nothing
 	if errors.Is(err, errSeekFailed) || fmt.Sprintf("%s", err) == "End of file" {
-		log.Println("Attempting to generate thumbnail without seeking first")
 		b, err = CreateThumbnailX(pathIn, false)
+		if err != nil {
+			log.Printf("%s: %s", pathIn, err)
+		}
 	}
+
+	// When all else fails, go generic
+	if err != nil {
+		b, err = CreateGenericThumbnail()
+		if err != nil {
+			log.Printf("%s: %s", pathIn, err)
+		}
+	}
+
 	return b, err
 }
 
-func CreateThumbnailX(pathIn string, seek bool) ([]byte, error) {
-	//return nil, errors.New("This is a test")
+// Just creates a 960x540 test image
+// Wanted to do a spectrum picture for audio files, but the filter consumed a lot of memory
+// So this is the fallback
+func CreateGenericThumbnail() ([]byte, error) {
+	tmpFile, err := os.CreateTemp(os.TempDir(), "servemediago-")
+	if err != nil {
+		log.Printf("%s", err)
+		return nil, err
+	}
+	defer os.Remove(tmpFile.Name())
 
+	imgH := 540
+	imgW := 960
+
+	ctxFmtOut, ctxEnc, err := CreateEncoderWEBP(imgW, imgH, tmpFile.Name())
+	if err != nil {
+		log.Printf("%s", err)
+		return nil, err
+	}
+	defer C.avformat_free_context(ctxFmtOut)
+	defer C.avcodec_close(ctxEnc)
+	defer C.avio_closep(&ctxFmtOut.pb)
+
+	graph, ctxSnk, err := InitFiltersTestImage(imgW, imgH)
+	if err != nil {
+		log.Printf("%s", err)
+		return nil, err
+	}
+	defer C.avfilter_graph_free(&graph)
+
+	pktEnc := C.av_packet_alloc()
+	defer C.av_packet_free(&pktEnc)
+
+	frameFiltered := C.av_frame_alloc()
+	defer C.av_frame_free(&frameFiltered)
+
+	err = avop(C.av_buffersink_get_frame(ctxSnk, frameFiltered))
+	if err != nil {
+		log.Printf("%s", err)
+		return nil, err
+	}
+
+	err = avop(C.avcodec_send_frame(ctxEnc, frameFiltered))
+	if err != nil {
+		log.Printf("%s", err)
+		return nil, err
+	}
+
+	err = avop(C.avcodec_send_frame(ctxEnc, nil))
+	if err != nil {
+		log.Printf("%s", err)
+		return nil, err
+	}
+
+	err = avop(C.avcodec_receive_packet(ctxEnc, pktEnc))
+	if err != nil {
+		log.Printf("%s", err)
+		return nil, err
+	}
+
+	err = avop(C.av_write_frame(ctxFmtOut, pktEnc))
+	if err != nil {
+		log.Printf("%s", err)
+		return nil, err
+	}
+
+	C.av_frame_unref(frameFiltered)
+	C.av_packet_unref(pktEnc)
+
+	err = avop(C.av_write_trailer(ctxFmtOut))
+	if err != nil {
+		log.Printf("%s", err)
+		return nil, err
+	}
+
+	rawThumb, err := io.ReadAll(tmpFile)
+	if err != nil {
+		log.Printf("%s", err)
+		return nil, err
+	}
+
+	return rawThumb, nil
+}
+
+
+func CreateThumbnailX(pathIn string, seek bool) ([]byte, error) {
 	var ctxFmtIn *C.AVFormatContext = nil
 	pathInArg := C.CString(pathIn)
 	defer C.free(unsafe.Pointer(pathInArg))
@@ -398,7 +430,7 @@ func CreateThumbnailX(pathIn string, seek bool) ([]byte, error) {
 		return nil, err
 	}
 
-	idxStream, ctxDec, err := OpenVideoStream(ctxFmtIn)
+	idxStream, ctxDec, err := OpenBestStream(ctxFmtIn, C.AVMEDIA_TYPE_VIDEO)
 	if err != nil {
 		return nil, err
 	}
@@ -411,7 +443,11 @@ func CreateThumbnailX(pathIn string, seek bool) ([]byte, error) {
 	}
 	defer os.Remove(tmpFile.Name())
 
-	ctxFmtOut, ctxEnc, err := CreateEncoderWEBP(ctxDec, tmpFile.Name())
+	imgH := 540
+	ratio := float64(imgH) / float64(ctxDec.height)
+	imgW := int(float64(ctxDec.width) * ratio)
+
+	ctxFmtOut, ctxEnc, err := CreateEncoderWEBP(imgW, imgH, tmpFile.Name())
 	if err != nil {
 		log.Printf("%s: %s\n", pathIn, err)
 		return nil, err
@@ -420,7 +456,7 @@ func CreateThumbnailX(pathIn string, seek bool) ([]byte, error) {
 	defer C.avcodec_close(ctxEnc)
 	defer C.avio_closep(&ctxFmtOut.pb)
 
-	graph, ctxSrc, ctxSnk, err := InitFilters(ctxEnc, ctxDec)
+	graph, ctxSrc, ctxSnk, err := InitFiltersScaling(ctxEnc, ctxDec)
 	if err != nil {
 		log.Printf("%s: %s\n", pathIn, err)
 		return nil, err
@@ -459,15 +495,14 @@ func CreateThumbnailX(pathIn string, seek bool) ([]byte, error) {
 			log.Printf("%s: %s\n", pathIn, err)
 			return nil, err
 		}
+		defer C.av_packet_unref(pktDec)
 
 		if pktDec.stream_index != C.int(idxStream) {
-			C.av_packet_unref(pktDec)
 			continue
 		}
 
 		err = avop(C.avcodec_send_packet(ctxDec, pktDec))
 		if err != nil {
-			C.av_packet_unref(pktDec)
 			log.Printf("%s: %s\n", pathIn, err)
 			return nil, err
 		}
@@ -478,27 +513,25 @@ func CreateThumbnailX(pathIn string, seek bool) ([]byte, error) {
 		// #define AVERROR(e) (-(e))
 		// so just negative of EAGAIN to check
 		if rc == -C.EAGAIN {
-			C.av_packet_unref(pktDec)
 			continue
 		}
 		if rc < 0 {
-			C.av_packet_unref(pktDec)
 			log.Printf("%s: %s\n", pathIn, err)
 			return nil, errors.New("Failed to decode frame")
 		}
+		defer C.av_frame_unref(frame)
 
 		if frame.pict_type != C.AV_PICTURE_TYPE_I {
-			C.av_frame_unref(frame)
 			continue
 		}
 
-		break
-	}
+		err = avop(C.av_buffersrc_add_frame_flags(ctxSrc, frame, 0))
+		if err != nil {
+			log.Printf("%s: %s\n", pathIn, err)
+			return nil, err
+		}
 
-	err = avop(C.av_buffersrc_add_frame_flags(ctxSrc, frame, 0))
-	if err != nil {
-		log.Printf("%s: %s\n", pathIn, err)
-		return nil, err
+		break
 	}
 
 	err = avop(C.av_buffersink_get_frame(ctxSnk, frameFiltered))
@@ -552,15 +585,14 @@ func CreateThumbnailX(pathIn string, seek bool) ([]byte, error) {
 	return rawThumb, nil
 }
 
+var errbuf_len = C.ulong(256)
+var errbuf = (*C.char)(C.malloc(errbuf_len))
 func avop(rc C.int) error {
 	if rc >= 0 {
 		return nil
 	}
 
-	errbuf_len := C.ulong(256)
-	errbuf := (*C.char)(C.malloc(errbuf_len))
-	defer C.free(unsafe.Pointer(errbuf))
-
 	C.av_make_error_string(errbuf, errbuf_len, rc)
 	return errors.New(C.GoString(errbuf))
 }
+

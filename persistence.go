@@ -11,18 +11,13 @@ import (
 	"strings"
 )
 
-// DESIGN#1
-// Search is just by tags with a rather badly constructed search query builder
-// Initial search is fine, however there should be some further search refinement options
-
-// DESIGN#2
-// I still haven't done paginated results wahey
-
 func initDB(db *sql.DB) error {
 	log.Println("Initialising database")
 
 	// WAL creates a few secondary files but generally I like it more
 	// find it plays nicer in general with most systems
+	// There's also WAL2 which addresses the ever-expanding write log problem
+	// But I don't think WAL2 is a standard feature yet
 	_, err := db.Exec("pragma journal_mode = wal;")
 	if err != nil {
 		log.Println(err)
@@ -139,22 +134,28 @@ func initRest(db *sql.DB) error {
 
 var errNotMediaFile = errors.New("File is not an image or video")
 
-func checkFile(filename string) ([]byte, map[string]string, error) {
-	thumbnail, err := CreateThumbnail(filename)
-	if err != nil {
-		return thumbnail, nil, errNotMediaFile
-	}
-
-	metadata, err := GetMetadata(filename)
-	if err != nil {
-		log.Println(err)
-		return thumbnail, metadata, err
-	}
-
+func parseMediaFile(filename string) ([]byte, map[string]string, error) {
 	info, err := os.Stat(filename)
 	if err != nil {
 		log.Println(err)
-		return thumbnail, metadata, err
+		return nil, nil, err
+	}
+	
+	metadata, err := GetMetadata(filename)
+	if err != nil {
+		if fmt.Sprintf("%s", err) == "Invalid data found when processing input" {
+			log.Printf("%s is not a media file", filename)
+			// Just isn't a media file
+			return nil, nil, errNotMediaFile
+		}
+		log.Printf("%s: %s", filename,  err)
+		return nil, nil, err
+	}
+
+	thumbnail, err := CreateThumbnail(filename)
+	if err != nil {
+		log.Printf("Failed to generate thumbnail for %s", filename)
+		//return nil, nil, err
 	}
 
 	metadata["diskfiletime"] = info.ModTime().UTC().Format("2006-01-02T15:04:05")
@@ -166,94 +167,11 @@ func checkFile(filename string) ([]byte, map[string]string, error) {
 	return thumbnail, metadata, nil
 }
 
-func addFileToDB(db *sql.DB, filename string) (bool, error) {
-	// This is a bit of handwave
-	// it's possibly the file is earnestly a media file but an error occurs anyway
-	// in that case then it won't be added to the db ever
-	// because it is already considered to be checked
-	// can fix this easily... think about it
-	_, err := db.Exec("insert into checked (filename) values (?);", filename)
-	if err != nil {
-		return false, nil
-	}
-
-	// Assume any failed thumbnail gen means it wasn't a media file
-	// what about audio? audio is skipped
-	thumbnail, err := CreateThumbnail(filename)
-	if err != nil {
-		return false, nil
-	}
-
-	metadata, err := GetMetadata(filename)
-	if err != nil {
-		log.Println(err)
-		return false, err
-	}
-
-	info, err := os.Stat(filename)
-	if err != nil {
-		log.Println(err)
-		return false, err
-	}
-
-	metadata["diskfiletime"] = info.ModTime().UTC().Format("2006-01-02T15:04:05")
-	metadata["diskfilename"] = filename
-	metadata["diskfilesize"] = fmt.Sprintf("%099d", info.Size())
-	thumbname := fmt.Sprintf("%s.webp", filename)
-	metadata["thumbname"] = thumbname
-
-	tx, err := db.Begin()
-	if err != nil {
-		log.Println(err)
-		return false, err
-	}
-	defer tx.Rollback()
-
-	stmtThumb, err := tx.Prepare(`
-		insert or replace into 
-			thumbnails (filename, image) 
-			    values (       ?,     ?);
-		`)
-	if err != nil {
-		log.Println(err)
-		return false, err
-	}
-	defer stmtThumb.Close()
-
-	stmtMetadata, err := tx.Prepare(`
-		insert or replace into 
-			  tags (filename, name, val) 
-			values (       ?,    ?,   ?);
-		`)
-	if err != nil {
-		log.Println(err)
-		return false, err
-	}
-	defer stmtMetadata.Close()
-
-	_, err = stmtThumb.Exec(thumbname, thumbnail)
-	if err != nil {
-		log.Println(err)
-		return false, err
-	}
-
-	for k, v := range metadata {
-		_, err = stmtMetadata.Exec(filename, k, v)
-		if err != nil {
-			log.Println(err)
-			return false, err
-		}
-	}
-
-	err = tx.Commit()
-	if err != nil {
-		log.Println(err)
-		return false, err
-	}
-
-	return true, nil
-}
-
+// Adds thumbnail and metadata to database in a transaction
+// You could consider updating more rows in a single transaction
+// But how many rows at once? I do not know
+// This has performed pretty reasonably in any case
+// The limiting performance factor is elsewhere (handling media files)
 func insertMedia(db *sql.DB, thumbnail []byte, metadata map[string]string) error {
 	tx, err := db.Begin()
 	if err != nil {
@@ -307,6 +225,9 @@ func insertMedia(db *sql.DB, thumbnail []byte, metadata map[string]string) error
 	return nil
 }
 
+// Majority of this function is orchestrating the goroutines
+// There may be opportunity to expand some error handling
+// However have not seen enough errors in testing to work on
 func addFilesToDB(db *sql.DB, path string) (int, error) {
 	count := 0
 
@@ -324,7 +245,14 @@ func addFilesToDB(db *sql.DB, path string) (int, error) {
 	}
 	log.Printf("%v files have not been checked previously\n", len(filenames))
 
+	if len(filenames) == 0 {
+		log.Printf("Nothing to do here")
+		return 0, nil
+	}
+
 	type Reply struct {
+		filename string
+		stopped bool
 		thumbnail []byte
 		metadata  map[string]string
 		err       error
@@ -344,31 +272,60 @@ func addFilesToDB(db *sql.DB, path string) (int, error) {
 			select {
 			case req := <-requests:
 				if req.stop {
+					req.respond<- Reply{
+						filename: req.filename,
+						stopped: true,
+						thumbnail: nil,
+						metadata: nil,
+						err: nil,
+					}
 					return
 				}
-				tmb, mt, err := checkFile(req.filename)
-				req.respond <- Reply{thumbnail: tmb, metadata: mt, err: err}
+
+				tmb, mt, err := parseMediaFile(req.filename)
+				req.respond <- Reply{
+					filename: req.filename,
+					stopped: false,
+					thumbnail: tmb,
+					metadata: mt,
+					err: err,
+				}
 			}
 		}
 	}
 
 	workerCount := 4
-	log.Printf("Launching %d goroutines to process media files", workerCount)
 	for i := 0; i < workerCount; i++ {
 		go worker()
 	}
 
-	log.Printf("Processing files with %d worker routines\n", workerCount)
+	log.Printf("Scanning files with %d goroutines\n", workerCount)
 
-	inFlight := 0
-	for i := 0; i < len(filenames); {
+	i := 0
+	req := Request{
+		stop: false,
+		filename: filenames[i],
+		respond: replies,
+	}
+
+	for workerCount > 0 {
 		select {
 		case reply := <-replies:
-			inFlight--
+			if reply.stopped {
+				workerCount--
+				continue
+			}
+
+			_, err := db.Exec("insert into checked (filename) values (?);", reply.filename)
+			if err != nil {
+				break
+			}
+
+			if reply.err == errNotMediaFile {
+				continue
+			}
+
 			if reply.err != nil {
-				if reply.err == errNotMediaFile {
-					continue
-				}
 				err = reply.err
 				break
 			}
@@ -377,37 +334,21 @@ func addFilesToDB(db *sql.DB, path string) (int, error) {
 			if err != nil {
 				break
 			}
+
 			count++
 
-		case requests <- Request{stop: false, filename: filenames[i], respond: replies}:
-			inFlight++
-			_, err := db.Exec("insert into checked (filename) values (?);", filenames[i])
-			if err != nil {
-				break
-			}
+		case requests <- req:
 			i++
-		}
-	}
-
-	log.Println("Files processed, cleaning up...")
-
-	for inFlight > 0 {
-		reply := <-replies
-		inFlight--
-		if reply.err != nil {
-			if reply.err == errNotMediaFile {
-				continue
+			if i < len(filenames) {
+				req.filename = filenames[i]
+			} else {
+				req.filename = ""
+				req.stop = true
 			}
-			err = reply.err
-			break
 		}
-
-		err = insertMedia(db, reply.thumbnail, reply.metadata)
-		if err != nil {
-			break
-		}
-		count++
 	}
+
+	log.Println("Files scanned, goroutines complete")
 
 	return count, err
 }
@@ -765,6 +706,8 @@ type SearchParameters struct {
 	KeyVals map[string]string
 }
 
+// builds up a monster query (technical term) using a series of with statements
+// that way the query can build in one direction, it's almost readable at the end
 func (params *SearchParameters) Prepare() (string, []interface{}) {
 	// the final query is made of bricks glued together
 	// it mostly builds up a lot of subqueries
@@ -853,7 +796,9 @@ func lookup2(db *sql.DB, params SearchParameters) ([]string, error) {
 	return res, err
 }
 
-// changes all tags to lowercase
+// changes all tag names to lowercase
+// album, ALBUM, Album -> album
+// artist, ARTIST, Artist -> artist
 func fixtags(db *sql.DB) error {
 	tx, err := db.Begin()
 	if err != nil {
@@ -905,7 +850,7 @@ func fixtags(db *sql.DB) error {
 	return nil
 }
 
-var punctuation = " \r\n\t\"`~()[]{}<>&^%$#@?!+-=_,.:;|/\\*"
+var punctuation = " \r\n\t\"`~()[]{}<>&^%$#@?!+-=_,.:;|/\\*'"
 
 func stringsplat(s, cutset string) []string {
 	res := make([]string, 0, 100)
@@ -930,6 +875,8 @@ func stringsplat(s, cutset string) []string {
 	return res
 }
 
+// word associations used for related videos and search refinement features
+// just takes tag contents, cleans them up, adds them to a key val table
 func wordassocs(db *sql.DB) error {
 	_, err := db.Exec(`
 		create table if not exists wordassocs (
@@ -1002,6 +949,9 @@ func wordassocs(db *sql.DB) error {
 	return err
 }
 
+// a search can be e.g. artist:devo title:'going under' remaster
+// have to parse the key:value pairs 
+// as well as the pure value terms
 func parseSearchTerms(formterms []string) SearchParameters {
 	terms := make([]string, 0, 50)
 	for _, term := range formterms {

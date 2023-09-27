@@ -18,3 +18,4 @@ func TestCreateThumbnail(t *testing.T) {
 		t.Fatalf("%v\n", err)
 	}
 }
+

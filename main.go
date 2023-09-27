@@ -7,6 +7,8 @@ package main
 
 import (
 	"database/sql"
+	"flag"
+	"fmt"
 	_ "github.com/mattn/go-sqlite3"
 	"log"
 	"net/http"
@@ -16,29 +18,30 @@ import (
 	"path/filepath"
 )
 
-var usage = "servemedia [path]"
+var flagPort = flag.Int("port", 8080, "webserver port")
+var flagPath = flag.String("path", ".", "directory to serve")
+var flagPathDB = flag.String("db", "info.db", "media info database path")
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
+	flag.Parse()
 
-	if len(os.Args) > 1 {
-		err := os.Chdir(os.Args[1])
+	if *flagPath != "." {
+		err := os.Chdir(*flagPath)
 		if err != nil {
 			log.Fatal(err)
 		}
 	}
 
-	pathMedia, err := os.Getwd()
-	if err != nil {
-		log.Fatal(err)
-	}
-	pathMedia = "."
-
-	pathDb := "info.db"
+	pathMedia := "."
+	pathDb := *flagPathDB
 
 	done := make(chan bool)
 	go func() {
-		http.ListenAndServe(":8080", nil)
+		err := http.ListenAndServe(fmt.Sprintf(":%d", *flagPort), nil)
+		if err != nil {
+			log.Fatal(err)
+		}
 		done <- true
 	}()
 
@@ -69,7 +72,7 @@ func main() {
 	}
 	log.Printf("%v files added to database\n", count)
 
-	log.Printf("Conducting word association...\n")
+	log.Printf("Building word association table...\n")
 	err = wordassocs(db)
 	if err != nil {
 		log.Fatal(err)
@@ -89,6 +92,8 @@ func main() {
 
 	terminate := make(chan os.Signal)
 	signal.Notify(terminate, os.Interrupt)
+
+	log.Printf("Initialisation complete, webserver running on port %d", *flagPort)
 
 	select {
 	case _ = <-done:

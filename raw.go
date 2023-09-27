@@ -3,9 +3,12 @@ package main
 // DESIGN#2
 // In order for this whole thing to compile neatly into one binary with no file dependencies
 // The templates, json config, etc. are all here in string literals
-// This is fine (really?) for deployment but for development this is annoying
-// Having to recompile every time you want to see changes in HTML/config reflect
+// Then they get added to the database
+// Can change them in there and see changes instantly
+// Except for routes, they need to be reloaded
 
+// HTML templates
+// These are inserted into the database in table called 'templates'
 var starterTemplates = map[string]string{
 	"base": `
 <html>
@@ -199,13 +202,20 @@ var starterTemplates = map[string]string{
 `,
 	"video": `
 <div>
-	{{if .duration}}
+	{{if eq (index .mediatype 0) "video"}}
 	<video controls>
 		<source src="/file/{{index .filename 0 | escapepath}}">
 		<a href="/file/{{index .filename 0 | escapepath}}">Download</a>
 	</video>
-	{{else}}
+	{{else if eq (index .mediatype 0) "audio"}}
+	<audio controls>
+		<source src="/file/{{index .filename 0 | escapepath}}">
+		<a href="/file/{{index .filename 0 | escapepath}}">Download</a>
+	</audio>
+	{{else if eq (index .mediatype 0) "image"}}
 	<img src="/file/{{index .filename 0 | escapepath}}"/>
+	{{else}}
+	<h3>Unknown media type "{{index .mediatype 0}}"</h3>
 	{{end}}
 
 	<div id="video-description">
@@ -299,6 +309,11 @@ var starterTemplates = map[string]string{
 `,
 }
 
+// Search bindings
+// Searches require special handling in code to build a query
+// These are stored in database table 'templatesearches'
+// Below shows that search route needs a query built called searchresults
+// args to search sourced from HTTP query parameter "terms"
 var routeDefaultSearches = map[string]map[string]SearchBundle{
 	"/search": {
 		"searchresults": {
@@ -307,10 +322,22 @@ var routeDefaultSearches = map[string]map[string]SearchBundle{
 	},
 }
 
+// routeDefaults are inserted into database in table 'routes'
+// Each URL can only have one method associated with it
+// 
+// route : { method, template, alias, redirect }
+// alias - neater name, useful for links
+// template - the template to use (see routeDefaultQueries for data handling)
+// method - get or post
+// redirect - go here instead
+//
+// method "post" implies a redirect and no template
+// method "get" implies at least a template
 var routeDefaults = map[string]map[string]string{
 	"/": {
 		"method":   "get",
 		"template": "index",
+		"alias": "Home",
 	},
 
 	"/search": {
@@ -351,12 +378,22 @@ var routeDefaults = map[string]map[string]string{
 	},
 }
 
+// routeDefaultQueries are inserted into database table 'templatequeries'
+// This table stores the SQL statements used to fill in data for templates
+// :variable are sourced from request parameters
 var routeDefaultQueries = map[string]map[string]string{
 	"/watch": {
 		"filename": `
 			select distinct(filename) 
 			from tags 
 			where filename is :filename;
+		`,
+
+		"mediatype": `
+			select val 
+			from tags 
+			where filename is :filename 
+			and name is 'mediatype';
 		`,
 
 		"title": `
@@ -555,8 +592,3 @@ var routeDefaultQueries = map[string]map[string]string{
 	},
 }
 
-var Fastlinks []Route = []Route{
-	{Path: "/", Alias: "Home"},
-	{Path: "/favourites/", Alias: "Favourites"},
-	{Path: "/templates/", Alias: "Templates"},
-}

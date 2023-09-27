@@ -166,6 +166,36 @@ func createSuperSoftServe(db *sql.DB, key string) http.HandlerFunc {
 	}
 }
 
+func getFastLinks(db *sql.DB) ([]Route, error) {
+	rows, err := db.Query(`
+		select
+			alias,
+			path
+		from
+			routes
+		where
+			alias is not null
+		`)
+	if err != nil {
+		log.Println(err)
+		return nil, err
+	}
+
+	routes := make([]Route, 0, 10)
+	for rows.Next() {
+		var alias, path string
+
+		err := rows.Scan(&alias, &path)
+		if err != nil {
+			log.Println(err)
+			return nil, err
+		}
+		routes = append(routes, Route{Alias: alias, Path: path})
+	}
+
+	return routes, nil
+}
+
 func superSoftServe(db *sql.DB, key string, w http.ResponseWriter, req *http.Request) {
 	row := db.QueryRow(`
 		select
@@ -277,16 +307,16 @@ func superSoftServe(db *sql.DB, key string, w http.ResponseWriter, req *http.Req
 
 	td := make(map[string]interface{})
 	td["path"] = req.URL.Path
-	td["routes"] = Fastlinks
-
-	// if there's something in the search box, hold onto it
-	//if _, ok := req.Form["terms"]; ok {
-	//	td["terms"] = strings.Join(req.Form["terms"], " ")
-	//}
+	td["routes"], err = getFastLinks(db)
 
 	// search terms, sort order, page number, and so on
 	for k, vs := range req.Form {
 		td[k] = strings.Join(vs, " ")
+	}
+	if err != nil {
+		log.Println(err)
+		fmt.Fprintf(w, "%s", err)
+		return
 	}
 
 	// results by default returns an array of string arrays
