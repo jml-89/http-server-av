@@ -140,7 +140,7 @@ func parseMediaFile(filename string) ([]byte, map[string]string, error) {
 		log.Println(err)
 		return nil, nil, err
 	}
-	
+
 	metadata, err := GetMetadata(filename)
 	if err != nil {
 		if fmt.Sprintf("%s", err) == "Invalid data found when processing input" {
@@ -148,7 +148,7 @@ func parseMediaFile(filename string) ([]byte, map[string]string, error) {
 			// Just isn't a media file
 			return nil, nil, errNotMediaFile
 		}
-		log.Printf("%s: %s", filename,  err)
+		log.Printf("%s: %s", filename, err)
 		return nil, nil, err
 	}
 
@@ -251,8 +251,8 @@ func addFilesToDB(db *sql.DB, path string) (int, error) {
 	}
 
 	type Reply struct {
-		filename string
-		stopped bool
+		filename  string
+		stopped   bool
 		thumbnail []byte
 		metadata  map[string]string
 		err       error
@@ -272,23 +272,23 @@ func addFilesToDB(db *sql.DB, path string) (int, error) {
 			select {
 			case req := <-requests:
 				if req.stop {
-					req.respond<- Reply{
-						filename: req.filename,
-						stopped: true,
+					req.respond <- Reply{
+						filename:  req.filename,
+						stopped:   true,
 						thumbnail: nil,
-						metadata: nil,
-						err: nil,
+						metadata:  nil,
+						err:       nil,
 					}
 					return
 				}
 
 				tmb, mt, err := parseMediaFile(req.filename)
 				req.respond <- Reply{
-					filename: req.filename,
-					stopped: false,
+					filename:  req.filename,
+					stopped:   false,
 					thumbnail: tmb,
-					metadata: mt,
-					err: err,
+					metadata:  mt,
+					err:       err,
 				}
 			}
 		}
@@ -303,9 +303,9 @@ func addFilesToDB(db *sql.DB, path string) (int, error) {
 
 	i := 0
 	req := Request{
-		stop: false,
+		stop:     false,
 		filename: filenames[i],
-		respond: replies,
+		respond:  replies,
 	}
 
 	for workerCount > 0 {
@@ -613,12 +613,19 @@ func cullMissing(db *sql.DB, dir string) error {
 	}
 	defer tx.Rollback()
 
-	stmt, err := tx.Prepare("delete from tags where filename is ?;")
+	stmtTagDel, err := tx.Prepare("delete from tags where filename is ?;")
 	if err != nil {
 		log.Println(err)
 		return err
 	}
-	defer stmt.Close()
+	defer stmtTagDel.Close()
+
+	stmtAssocDel, err := tx.Prepare("delete from wordassocs where filename is ?;")
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+	defer stmtAssocDel.Close()
 
 	count := 0
 	rows, err := tx.Query(`
@@ -644,11 +651,18 @@ func cullMissing(db *sql.DB, dir string) error {
 		if errors.Is(err, os.ErrNotExist) {
 			// file moved, or removed
 			log.Printf("Removing %s\n", path)
-			_, err = stmt.Exec(filename)
+			_, err = stmtTagDel.Exec(filename)
 			if err != nil {
 				log.Println(err)
 				return err
 			}
+
+			_, err = stmtAssocDel.Exec(filename)
+			if err != nil {
+				log.Println(err)
+				return err
+			}
+
 			count += 1
 			continue
 		}
@@ -950,7 +964,7 @@ func wordassocs(db *sql.DB) error {
 }
 
 // a search can be e.g. artist:devo title:'going under' remaster
-// have to parse the key:value pairs 
+// have to parse the key:value pairs
 // as well as the pure value terms
 func parseSearchTerms(formterms []string) SearchParameters {
 	terms := make([]string, 0, 50)

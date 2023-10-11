@@ -194,7 +194,6 @@ func createFilter(id, filter, args string, graph *C.AVFilterGraph) (*C.AVFilterC
 	return ctx, err
 }
 
-
 func InitFiltersTestImage(imgW, imgH int) (*C.AVFilterGraph, *C.AVFilterContext, error) {
 	graph := C.avfilter_graph_alloc()
 
@@ -229,7 +228,7 @@ func InitFiltersScaling(ctxEnc, ctxDec *C.AVCodecContext) (*C.AVFilterGraph, *C.
 	graph := C.avfilter_graph_alloc()
 	ctxSrc, err := createFilter(
 		"in",
-		"buffer", 
+		"buffer",
 		fmt.Sprintf("video_size=%dx%d:pix_fmt=%d:time_base=30001/1:pixel_aspect=1/1",
 			ctxDec.width, ctxDec.height, ctxDec.pix_fmt),
 		graph)
@@ -304,13 +303,20 @@ func OpenBestStream(ctxFmt *C.AVFormatContext, avtype int32) (C.uint, *C.AVCodec
 var errSeekFailed = errors.New("Seek failed")
 
 func CreateThumbnail(pathIn string) ([]byte, error) {
-	b, err := CreateThumbnailX(pathIn, true)
+	tmpFile, err := os.CreateTemp(os.TempDir(), "servemediago-")
+	if err != nil {
+		log.Printf("%s", err)
+		return nil, err
+	}
+	defer os.Remove(tmpFile.Name())
+
+	err = CreateThumbnailX(pathIn, tmpFile.Name(), true)
 
 	// Some streams don't support seeking
 	// In this case just do a thumbnail of the first frame
 	// Better than nothing
 	if errors.Is(err, errSeekFailed) || fmt.Sprintf("%s", err) == "End of file" {
-		b, err = CreateThumbnailX(pathIn, false)
+		err = CreateThumbnailX(pathIn, tmpFile.Name(), false)
 		if err != nil {
 			log.Printf("%s: %s", pathIn, err)
 		}
@@ -318,10 +324,17 @@ func CreateThumbnail(pathIn string) ([]byte, error) {
 
 	// When all else fails, go generic
 	if err != nil {
-		b, err = CreateGenericThumbnail()
+		err = CreateGenericThumbnail(tmpFile.Name())
 		if err != nil {
 			log.Printf("%s: %s", pathIn, err)
+			return nil, err
 		}
+	}
+
+	b, err := io.ReadAll(tmpFile)
+	if err != nil {
+		log.Printf("%s", err)
+		return nil, err
 	}
 
 	return b, err
@@ -330,30 +343,23 @@ func CreateThumbnail(pathIn string) ([]byte, error) {
 // Just creates a 960x540 test image
 // Wanted to do a spectrum picture for audio files, but the filter consumed a lot of memory
 // So this is the fallback
-func CreateGenericThumbnail() ([]byte, error) {
-	tmpFile, err := os.CreateTemp(os.TempDir(), "servemediago-")
-	if err != nil {
-		log.Printf("%s", err)
-		return nil, err
-	}
-	defer os.Remove(tmpFile.Name())
-
+func CreateGenericThumbnail(pathOut string) error {
 	imgH := 540
 	imgW := 960
 
-	ctxFmtOut, ctxEnc, err := CreateEncoderWEBP(imgW, imgH, tmpFile.Name())
+	ctxFmtOut, ctxEnc, err := CreateEncoderWEBP(imgW, imgH, pathOut)
 	if err != nil {
 		log.Printf("%s", err)
-		return nil, err
+		return err
 	}
 	defer C.avformat_free_context(ctxFmtOut)
-	defer C.avcodec_close(ctxEnc)
+	defer C.avcodec_free_context(&ctxEnc)
 	defer C.avio_closep(&ctxFmtOut.pb)
 
 	graph, ctxSnk, err := InitFiltersTestImage(imgW, imgH)
 	if err != nil {
 		log.Printf("%s", err)
-		return nil, err
+		return err
 	}
 	defer C.avfilter_graph_free(&graph)
 
@@ -366,31 +372,31 @@ func CreateGenericThumbnail() ([]byte, error) {
 	err = avop(C.av_buffersink_get_frame(ctxSnk, frameFiltered))
 	if err != nil {
 		log.Printf("%s", err)
-		return nil, err
+		return err
 	}
 
 	err = avop(C.avcodec_send_frame(ctxEnc, frameFiltered))
 	if err != nil {
 		log.Printf("%s", err)
-		return nil, err
+		return err
 	}
 
 	err = avop(C.avcodec_send_frame(ctxEnc, nil))
 	if err != nil {
 		log.Printf("%s", err)
-		return nil, err
+		return err
 	}
 
 	err = avop(C.avcodec_receive_packet(ctxEnc, pktEnc))
 	if err != nil {
 		log.Printf("%s", err)
-		return nil, err
+		return err
 	}
 
 	err = avop(C.av_write_frame(ctxFmtOut, pktEnc))
 	if err != nil {
 		log.Printf("%s", err)
-		return nil, err
+		return err
 	}
 
 	C.av_frame_unref(frameFiltered)
@@ -399,20 +405,13 @@ func CreateGenericThumbnail() ([]byte, error) {
 	err = avop(C.av_write_trailer(ctxFmtOut))
 	if err != nil {
 		log.Printf("%s", err)
-		return nil, err
+		return err
 	}
 
-	rawThumb, err := io.ReadAll(tmpFile)
-	if err != nil {
-		log.Printf("%s", err)
-		return nil, err
-	}
-
-	return rawThumb, nil
+	return nil
 }
 
-
-func CreateThumbnailX(pathIn string, seek bool) ([]byte, error) {
+func CreateThumbnailX(pathIn, pathOut string, seek bool) error {
 	var ctxFmtIn *C.AVFormatContext = nil
 	pathInArg := C.CString(pathIn)
 	defer C.free(unsafe.Pointer(pathInArg))
@@ -420,46 +419,39 @@ func CreateThumbnailX(pathIn string, seek bool) ([]byte, error) {
 	err := avop(C.avformat_open_input(&ctxFmtIn, pathInArg, nil, nil))
 	if err != nil {
 		// if it fails here, it's because the file wasn't a media file
-		return nil, err
+		return err
 	}
 	defer C.avformat_close_input(&ctxFmtIn)
 
 	err = avop(C.avformat_find_stream_info(ctxFmtIn, nil))
 	if err != nil {
 		log.Printf("%s: %s\n", pathIn, err)
-		return nil, err
+		return err
 	}
 
 	idxStream, ctxDec, err := OpenBestStream(ctxFmtIn, C.AVMEDIA_TYPE_VIDEO)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	defer C.avcodec_close(ctxDec)
-
-	tmpFile, err := os.CreateTemp(os.TempDir(), "servemediago-")
-	if err != nil {
-		log.Printf("%s: %s\n", pathIn, err)
-		return nil, err
-	}
-	defer os.Remove(tmpFile.Name())
+	defer C.avcodec_free_context(&ctxDec)
 
 	imgH := 540
 	ratio := float64(imgH) / float64(ctxDec.height)
 	imgW := int(float64(ctxDec.width) * ratio)
 
-	ctxFmtOut, ctxEnc, err := CreateEncoderWEBP(imgW, imgH, tmpFile.Name())
+	ctxFmtOut, ctxEnc, err := CreateEncoderWEBP(imgW, imgH, pathOut)
 	if err != nil {
 		log.Printf("%s: %s\n", pathIn, err)
-		return nil, err
+		return err
 	}
 	defer C.avformat_free_context(ctxFmtOut)
-	defer C.avcodec_close(ctxEnc)
+	defer C.avcodec_free_context(&ctxEnc)
 	defer C.avio_closep(&ctxFmtOut.pb)
 
 	graph, ctxSrc, ctxSnk, err := InitFiltersScaling(ctxEnc, ctxDec)
 	if err != nil {
 		log.Printf("%s: %s\n", pathIn, err)
-		return nil, err
+		return err
 	}
 	defer C.avfilter_graph_free(&graph)
 
@@ -473,7 +465,7 @@ func CreateThumbnailX(pathIn string, seek bool) ([]byte, error) {
 		timestamp := C.av_q2d(rts)
 		err = avop(C.av_seek_frame(ctxFmtIn, C.int(idxStream), C.long(timestamp), 0))
 		if err != nil {
-			return nil, errSeekFailed
+			return errSeekFailed
 		}
 	}
 
@@ -493,7 +485,7 @@ func CreateThumbnailX(pathIn string, seek bool) ([]byte, error) {
 		err = avop(C.av_read_frame(ctxFmtIn, pktDec))
 		if err != nil {
 			log.Printf("%s: %s\n", pathIn, err)
-			return nil, err
+			return err
 		}
 		defer C.av_packet_unref(pktDec)
 
@@ -504,7 +496,7 @@ func CreateThumbnailX(pathIn string, seek bool) ([]byte, error) {
 		err = avop(C.avcodec_send_packet(ctxDec, pktDec))
 		if err != nil {
 			log.Printf("%s: %s\n", pathIn, err)
-			return nil, err
+			return err
 		}
 
 		rc := C.avcodec_receive_frame(ctxDec, frame)
@@ -517,7 +509,7 @@ func CreateThumbnailX(pathIn string, seek bool) ([]byte, error) {
 		}
 		if rc < 0 {
 			log.Printf("%s: %s\n", pathIn, err)
-			return nil, errors.New("Failed to decode frame")
+			return errors.New("Failed to decode frame")
 		}
 		defer C.av_frame_unref(frame)
 
@@ -528,7 +520,7 @@ func CreateThumbnailX(pathIn string, seek bool) ([]byte, error) {
 		err = avop(C.av_buffersrc_add_frame_flags(ctxSrc, frame, 0))
 		if err != nil {
 			log.Printf("%s: %s\n", pathIn, err)
-			return nil, err
+			return err
 		}
 
 		break
@@ -537,31 +529,31 @@ func CreateThumbnailX(pathIn string, seek bool) ([]byte, error) {
 	err = avop(C.av_buffersink_get_frame(ctxSnk, frameFiltered))
 	if err != nil {
 		log.Printf("%s: %s\n", pathIn, err)
-		return nil, err
+		return err
 	}
 
 	err = avop(C.avcodec_send_frame(ctxEnc, frameFiltered))
 	if err != nil {
 		log.Printf("%s: %s\n", pathIn, err)
-		return nil, err
+		return err
 	}
 
 	err = avop(C.avcodec_send_frame(ctxEnc, nil))
 	if err != nil {
 		log.Printf("%s: %s\n", pathIn, err)
-		return nil, err
+		return err
 	}
 
 	err = avop(C.avcodec_receive_packet(ctxEnc, pktEnc))
 	if err != nil {
 		log.Printf("%s: %s\n", pathIn, err)
-		return nil, err
+		return err
 	}
 
 	err = avop(C.av_write_frame(ctxFmtOut, pktEnc))
 	if err != nil {
 		log.Printf("%s: %s\n", pathIn, err)
-		return nil, err
+		return err
 	}
 
 	C.av_frame_unref(frameFiltered)
@@ -573,26 +565,22 @@ func CreateThumbnailX(pathIn string, seek bool) ([]byte, error) {
 	err = avop(C.av_write_trailer(ctxFmtOut))
 	if err != nil {
 		log.Printf("%s: %s\n", pathIn, err)
-		return nil, err
+		return err
 	}
 
-	rawThumb, err := io.ReadAll(tmpFile)
-	if err != nil {
-		log.Printf("%s: %s\n", pathIn, err)
-		return nil, err
-	}
-
-	return rawThumb, nil
+	return nil
 }
 
-var errbuf_len = C.ulong(256)
-var errbuf = (*C.char)(C.malloc(errbuf_len))
 func avop(rc C.int) error {
 	if rc >= 0 {
 		return nil
 	}
 
+	errbuf_len := C.ulong(256)
+	errbuf := (*C.char)(C.malloc(errbuf_len))
+	defer C.free(unsafe.Pointer(errbuf))
+
 	C.av_make_error_string(errbuf, errbuf_len, rc)
+
 	return errors.New(C.GoString(errbuf))
 }
-
