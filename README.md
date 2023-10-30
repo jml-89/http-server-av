@@ -1,4 +1,4 @@
-# http-server-more
+# httpfileserve
 A less simple more featured webserver for a directory of files
 
 ## Features
