@@ -1,4 +1,4 @@
-module jl/servemedia
+module jl/httpfileserve
 
 go 1.18
 

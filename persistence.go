@@ -85,6 +85,12 @@ func initDB(db *sql.DB) error {
 		return err
 	}
 
+	err = initRouteValues(db)
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+
 	err = initTemplates(db)
 	if err != nil {
 		log.Println(err)
@@ -403,6 +409,55 @@ func initRoutesCore(db *sql.DB) error {
 	return nil
 }
 
+func initRouteValues(db *sql.DB) error {
+	_, err := db.Exec(`
+		create table if not exists routevalues (
+			path text,
+			k text,
+			v text,
+			primary key (path, k)
+		);`)
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(`
+		insert or ignore into 
+		routevalues (path, k, v)
+		values (:path, :k, :v);
+	`)
+
+	for path, pack := range routeDefaultValues {
+		for k, v := range pack {
+			_, err = stmt.Exec(
+				sql.Named("path", path),
+				sql.Named("k", k),
+				sql.Named("v", v),
+			)
+			if err != nil {
+				log.Println(err)
+				return err
+			}
+		}
+	}
+
+	err = tx.Commit()
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+
+	return nil
+}
+
 func initTemplateQueries(db *sql.DB) error {
 	_, err := db.Exec(`
 		create table if not exists templatequeries (
@@ -598,7 +653,7 @@ func getTemplate(db *sql.DB, name string) (string, error) {
 	var raw string
 	err := row.Scan(&raw)
 	if err != nil {
-		log.Printf("Could not find template '%'\n", name)
+		log.Printf("Could not find template '%s'\n", name)
 		return raw, err
 	}
 
@@ -974,7 +1029,7 @@ func parseSearchTerms(formterms []string) SearchParameters {
 
 		basegrow := func(x int) {
 			if i > lo {
-				log.Printf("Term: %s\n", term[lo:i+x])
+				//log.Printf("Term: %s\n", term[lo:i+x])
 				terms = append(terms, term[lo:i+x])
 			}
 			lo = i + 1
@@ -1032,10 +1087,12 @@ func parseSearchTerms(formterms []string) SearchParameters {
 		grow()
 	}
 
+	/*
 	log.Printf("Terms:\n")
 	for _, term := range terms {
 		log.Printf("\t%s\n", term)
 	}
+	*/
 
 	params := SearchParameters{
 		Vals:    make([]string, 0, 50),
@@ -1060,4 +1117,72 @@ func parseSearchTerms(formterms []string) SearchParameters {
 	}
 
 	return params
+}
+
+func getRouteVals(db *sql.DB, key string) (map[string]string, error) {
+	rows, err := db.Query(`
+		select k, v
+		from routevalues
+		where path is :key;
+		`, sql.Named("key", key))
+	if err != nil {
+		log.Println(err)
+		return nil, err
+	}
+	defer rows.Close()
+
+	kvs := make(map[string]string)
+	for rows.Next() {
+		var k, v string
+		err = rows.Scan(&k, &v)
+		if err != nil {
+			log.Println(err)
+			return nil, err
+		}
+
+		kvs[k] = v
+	}
+
+	return kvs, err
+}
+
+func runTemplateQueries(db *sql.DB, key string, inserts map[string]string, args []any) (map[string][][]string, error) {
+	rows, err := db.Query(`
+		select name, content
+		from templatequeries
+		where path is :key;
+		`, sql.Named("key", key))
+	if err != nil {
+		log.Println(err)
+		return nil, err
+	}
+	defer rows.Close()
+
+	queryResults := make(map[string][][]string)
+	for rows.Next() {
+		var name, query string
+		err = rows.Scan(&name, &query)
+		if err != nil {
+			log.Println(err)
+			return nil, err
+		}
+
+		for before, after := range inserts {
+			query = strings.Replace(
+				query,
+				fmt.Sprintf("{{%s}}", before), after,
+				-1,
+			)
+		}
+
+		elems, err := runQuery(db, query, args)
+		if err != nil {
+			log.Println(err)
+			return nil, err
+		}
+
+		queryResults[name] = elems
+	}
+
+	return queryResults, err 
 }

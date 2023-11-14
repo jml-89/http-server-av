@@ -65,6 +65,7 @@ func addRoutes(db *sql.DB) error {
 		log.Println(err)
 		return err
 	}
+	defer rows.Close()
 
 	for rows.Next() {
 		var path string
@@ -180,6 +181,7 @@ func getFastLinks(db *sql.DB) ([]Route, error) {
 		log.Println(err)
 		return nil, err
 	}
+	defer rows.Close()
 
 	routes := make([]Route, 0, 10)
 	for rows.Next() {
@@ -194,6 +196,31 @@ func getFastLinks(db *sql.DB) ([]Route, error) {
 	}
 
 	return routes, nil
+}
+
+func getTags(db *sql.DB, filename string) (map[string]string, error) {
+	rows, err := db.Query(
+		"select name, val from tags where filename is :filename",
+		sql.Named("filename", filename))
+	if err != nil {
+		log.Println(err)
+		return nil, err
+	}
+	defer rows.Close()
+
+	xs := make(map[string]string)
+	for rows.Next() {
+		var n, v string
+		err = rows.Scan(&n, &v)
+		if err != nil {
+			log.Println(err)
+			return nil, err
+		}
+
+		xs[n] = v
+	}
+
+	return xs, err
 }
 
 func superSoftServe(db *sql.DB, key string, w http.ResponseWriter, req *http.Request) {
@@ -229,6 +256,20 @@ func superSoftServe(db *sql.DB, key string, w http.ResponseWriter, req *http.Req
 		return
 	}
 
+	// default values when not present in form
+	kvs, err := getRouteVals(db, key)
+	if err != nil {
+		log.Println(err)
+		fmt.Fprintf(w, "%s", err)
+		return
+	}
+	for k, v := range kvs {
+		if _, ok := req.Form[k]; ok {
+			continue
+		}
+		req.Form[k] = []string{v}
+	}
+
 	// search
 	inserts, fills, err := getSearchGear(db, key, req.Form)
 	if err != nil {
@@ -236,6 +277,7 @@ func superSoftServe(db *sql.DB, key string, w http.ResponseWriter, req *http.Req
 		fmt.Fprintf(w, "%s", err)
 		return
 	}
+
 
 	// for the time being only the first value for each key is taken
 	args := make([]any, 0, 10)
@@ -251,68 +293,42 @@ func superSoftServe(db *sql.DB, key string, w http.ResponseWriter, req *http.Req
 	}
 	args = append(args, fills...)
 
-	rows, err := db.Query(`
-		select name, content
-		from templatequeries
-		where path is :key;
-		`, sql.Named("key", key))
-	if err != nil {
-		log.Println(err)
-		fmt.Fprintf(w, "%s", err)
-		return
-	}
-	defer rows.Close()
-
-	queryResults := make(map[string][][]string)
-	for rows.Next() {
-		var name, query string
-		err = rows.Scan(&name, &query)
-		if err != nil {
-			log.Println(err)
-			fmt.Fprintf(w, "%s", err)
-			return
-		}
-
-		for before, after := range inserts {
-			query = strings.Replace(
-				query,
-				fmt.Sprintf("{{%s}}", before), after,
-				-1,
-			)
-		}
-
-		elems, err := runQuery(db, query, args)
-		if err != nil {
-			log.Println(err)
-			fmt.Fprintf(w, "%s", err)
-			return
-		}
-
-		queryResults[name] = elems
-	}
-
-	if templatename == "" && redirect == "" {
-		redirect = req.URL.Path
-	}
-	if redirect != "" {
-		http.Redirect(w, req, redirect, http.StatusFound)
-	}
-
-	tmpl, err := loadTemplate(db, templatename)
-	if err != nil {
-		log.Println(err)
-		fmt.Fprintf(w, "%s", err)
-		return
-	}
-
 	td := make(map[string]interface{})
 	td["path"] = req.URL.Path
 	td["routes"], err = getFastLinks(db)
+
+	if _, ok := req.Form["filename"]; ok {
+		s, err := url.QueryUnescape(req.Form["filename"][0])
+		if err != nil {
+			log.Println(err)
+			fmt.Fprintf(w, "%s", err)
+			return
+		}
+
+		tags, err := getTags(db, s)
+		if err != nil {
+			log.Println(err)
+			fmt.Fprintf(w, "%s", err)
+			return
+		}
+
+		for k, v := range tags {
+			//log.Printf("%s: %s\n", k, v)
+			td[k] = v
+		}
+	}
 
 	// search terms, sort order, page number, and so on
 	for k, vs := range req.Form {
 		td[k] = strings.Join(vs, " ")
 	}
+	if err != nil {
+		log.Println(err)
+		fmt.Fprintf(w, "%s", err)
+		return
+	}
+
+	queryResults, err := runTemplateQueries(db, key, inserts, args)
 	if err != nil {
 		log.Println(err)
 		fmt.Fprintf(w, "%s", err)
@@ -333,7 +349,9 @@ func superSoftServe(db *sql.DB, key string, w http.ResponseWriter, req *http.Req
 			}
 		}
 
-		if maxlen == 1 {
+		if maxlen == 1 && len(results) == 1 {
+			td[name] = results[0][0]
+		} else if maxlen == 1 {
 			squash := make([]string, 0, len(results))
 			for _, xs := range results {
 				squash = append(squash, xs[0])
@@ -342,6 +360,22 @@ func superSoftServe(db *sql.DB, key string, w http.ResponseWriter, req *http.Req
 		} else {
 			td[name] = results
 		}
+	}
+
+	if templatename == "" && redirect == "" {
+		redirect = req.URL.Path
+	}
+
+	if redirect != "" {
+		http.Redirect(w, req, redirect, http.StatusFound)
+		return
+	}
+
+	tmpl, err := loadTemplate(db, templatename)
+	if err != nil {
+		log.Println(err)
+		fmt.Fprintf(w, "%s", err)
+		return
 	}
 
 	err = tmpl.Execute(w, td)
@@ -412,13 +446,15 @@ func runQuery(db *sql.DB, query string, args []any) ([][]string, error) {
 	var rows *sql.Rows
 	var err error
 	if len(args) == 0 {
-		log.Printf("%s\n", query)
+		//log.Printf("%s\n", query)
 		rows, err = db.Query(query)
 	} else {
+		/*
 		log.Printf("Query: %s\n", query)
 		for _, arg := range args {
 			log.Printf("\t%v\n", arg)
 		}
+		*/
 		rows, err = db.Query(query, args...)
 	}
 	if err != nil {

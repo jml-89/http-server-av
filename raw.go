@@ -11,10 +11,8 @@ package main
 // These are inserted into the database in table called 'templates'
 var starterTemplates = map[string]string{
 	"base": `
+<!DOCTYPE html>
 <html>
-	<head>
-		<title>Typing At Computers</title>
-	</head>
 	<style>
 		#thumbs {
 			display: flex;
@@ -76,11 +74,17 @@ var starterTemplates = map[string]string{
 			max-width: 100%;
 		}
 	</style>
+
+	<head>
+		<title>Typing At Computers</title>
+	</head>
 	<body>
 		<div id="top-bar">
 			<div id="quick-links">
 				{{range $i, $e := .routes}}
+				{{if .Alias}}
 				<a href="{{.Path}}">{{.Alias}}</a>
+				{{end}}
 				{{end}}
 			</div>
 
@@ -94,7 +98,6 @@ var starterTemplates = map[string]string{
 		</div>
 
 		{{template "body" .}}
-
 	</body>
 </html>
 `,
@@ -113,56 +116,65 @@ var starterTemplates = map[string]string{
 `,
 	"video": `
 <div>
-	{{if eq (index .mediatype 0) "video"}}
+	{{if eq .mediatype "video"}}
 	<video controls>
-		<source src="/file/{{index .filename 0 | escapepath}}">
-		<a href="/file/{{index .filename 0 | escapepath}}">Download</a>
+		<source src="/file/{{.diskfilename | escapepath}}">
+		<a href="/file/{{.diskfilename | escapepath}}">Download</a>
 	</video>
-	{{else if eq (index .mediatype 0) "audio"}}
+	{{else if eq .mediatype "audio"}}
 	<audio controls>
-		<source src="/file/{{index .filename 0 | escapepath}}">
-		<a href="/file/{{index .filename 0 | escapepath}}">Download</a>
+		<source src="/file/{{.filename | escapepath}}">
+		<a href="/file/{{.filename | escapepath}}">Download</a>
 	</audio>
-	{{else if eq (index .mediatype 0) "image"}}
-	<img src="/file/{{index .filename 0 | escapepath}}"/>
+	{{else if eq $.mediatype "image"}}
+	<img src="/file/{{.filename | escapepath}}"/>
 	{{else}}
-	<h3>Unknown media type "{{index .mediatype 0}}"</h3>
+	<h3>Unknown media type "{{.mediatype}}"</h3>
 	{{end}}
 
-	<div id="video-description">
-		<h1>{{if .title}}{{index .title 0}}{{else}}{{index .filename 0}}{{end}}</h1>
-		{{if .artist}}<h2>Created by <a href="/search?terms=artist:&quot;{{index .artist 0 }}&quot;">{{index .artist 0}}</a></h2>{{end}}
+	<div id="video-title">
+		<h1>{{if .title}}{{.title}}{{else}}{{.filename}}{{end}}</h1>
 	</div>
 
 	{{if .favourite}}
 	<form id="remove-from-favourites" action="/favourites/remove" method="post">
-		<input type="hidden" name="filename" value="{{index .filename 0}}">
+		<input type="hidden" name="filename" value="{{.filename}}">
 		<input type="submit" value="Remove from Favourites">
 	</form>
 	{{else}}
 	<form id="add-to-favourites" action="/favourites/add" method="post">
-		<input type="hidden" name="filename" value="{{index .filename 0}}">
+		<input type="hidden" name="filename" value="{{.filename}}">
 		<input type="submit" value="Add to Favourites">
 	</form>
 	{{end}}
 
+	<div id="video-description">
+		{{if .artist}}<h2>Created by <a href="/search?terms=artist:&quot;{{.artist}}&quot;">{{.artist}}</a></h2>{{end}}
+		{{if .date}}
+		<h2>Published on {{.date}}</h2>
+		{{else}}
+		<h2>File date is {{.diskfiletime}}</h2>
+		{{end}}
+		{{if .description}}<pre>{{.description}}</pre>{{end}}
+	</div>
 
-	<h1>Metadata</h1>
+	<h1>Related Videos</h1>
+	<ol>{{range $k, $vs := .related}}
+		<li><a href="/watch?filename={{index $vs 0 | escapequery}}"><img src="/tmb/{{index $vs 1 | escapepath}}"/><h2>{{index $vs 0 | prettyprint}}</h2></a></li>
+	{{end}}</ol>
+
+	<h1>Page Data</h1>
 	<table>
 		<tbody>
-		{{range $k, $pair := .tags}}
+		{{range $k, $v := .}}
 			<tr>
-				<td><a href="/search?terms={{index $pair 0}}:&quot;{{index $pair 1}}&quot;">{{index $pair 0}}</a></td>
-				<td>{{index $pair 1}}</td>
+				<td>{{$k}}</td>
+				<td>{{$v}}</td>
 			</tr>
 		{{end}}
 		</tbody>
 	</table>
 
-	<h1>Related Videos</h1>
-	<ol>{{range $k, $vs := .related}}
-		<li><a href="/watch?filename={{index $vs 0 | escapequery}}"><img src="/tmb/{{index $vs 1 | escapepath}}"/><h2>{{index $vs 0 | prettyprint}}</h2></a><h3>{{index $vs 2}}</h3></li>
-	{{end}}</ol>
 </div>
 `,
 	"index": `
@@ -182,7 +194,7 @@ var starterTemplates = map[string]string{
 </div>
 {{end}}
 
-<h2>Sort By</h2>
+<h2>Sort By: {{$.sortcriteria}}</h2>
 <div id="search-refinements">
 	<form action="/search" method="get">
 		<input type="hidden" name="terms" value="{{$.terms}}" required>
@@ -217,7 +229,7 @@ var starterTemplates = map[string]string{
 	</form>
 </div>
 
-<h2>Sort Order</h2>
+<h2>Sort Order: {{$.sortorder}}</h2>
 <div id="search-refinements">
 	<form action="/search" method="get">
 		<input type="hidden" name="terms" value="{{$.terms}}" required>
@@ -245,13 +257,13 @@ var starterTemplates = map[string]string{
 </div>
 
 
-<h2>Page</h2>
+<h2>Page: {{$.pagenumber}}</h2>
 <div id="search-refinements">
 	<form action="/search" method="get">
 		<input type="hidden" name="terms" value="{{$.terms}}" required>
 		<input type="hidden" name="sortcriteria" value="{{$.sortcriteria}}">
 		<input type="hidden" name="sortorder" id="sort-order" value="{{$.sortorder}}">
-		<input type="hidden" name="pagenumber" value="{{index $.nextpagenumber 0}}">
+		<input type="hidden" name="pagenumber" value="{{$.nextpagenumber}}">
 		<input type="submit" value="Next">
 	</form>
 </div>
@@ -274,7 +286,7 @@ var starterTemplates = map[string]string{
 			<input type="hidden" name="terms" value="{{$.terms}}" required>
 			<input type="hidden" name="sortcriteria" value="{{$.sortcriteria}}">
 			<input type="hidden" name="sortorder" id="sort-order" value="{{$.sortorder}}">
-			<input type="hidden" name="pagenumber" value="{{index $.nextpagenumber 0}}">
+			<input type="hidden" name="pagenumber" value="{{$.nextpagenumber}}">
 			<input type="submit" value="Next">
 		</form>
 	</div>
@@ -395,55 +407,22 @@ var routeDefaults = map[string]map[string]string{
 	},
 }
 
+var routeDefaultValues = map[string]map[string]string{
+	"/search": {
+		"pagenumber": "0",
+		"sortcriteria": "diskfiletime",
+		"sortorder": "desc",
+		"issearch": "1",
+	},
+}
+
 // routeDefaultQueries are inserted into database table 'templatequeries'
 // This table stores the SQL statements used to fill in data for templates
 // :variable are sourced from request parameters
 var routeDefaultQueries = map[string]map[string]string{
 	"/watch": {
-		"filename": `
-			select distinct(filename) 
-			from tags 
-			where filename is :filename;
-		`,
-
-		"mediatype": `
-			select val 
-			from tags 
-			where filename is :filename 
-			and name is 'mediatype';
-		`,
-
-		"title": `
-			select val 
-			from tags 
-			where filename is :filename 
-			and name is 'title';
-		`,
-
-		"duration": `
-			select val 
-			from tags 
-			where filename is :filename 
-			and name is 'duration';
-		`,
-
-		"artist": `
-			select val 
-			from tags 
-			where filename is :filename 
-			and name is 'artist';
-		`,
-
-		"tags": `
-			select name, val 
-			from tags 
-			where filename is :filename;
-		`,
-
 		"favourite": `
-			select filename 
-			from favourites 
-			where filename is :filename;
+			select filename from favourites where filename is :filename;
 		`,
 
 		"related": `
@@ -551,10 +530,6 @@ var routeDefaultQueries = map[string]map[string]string{
 
 		"nextpagenumber": `
 			select :pagenumber + 1;
-		`,
-
-		"issearch": `
-			select 1;
 		`,
 
 		"refinements": `
