@@ -164,6 +164,7 @@ func parseMediaFile(filename string) ([]byte, map[string]string, error) {
 		//return nil, nil, err
 	}
 
+	metadata["favourite"] = "false"
 	metadata["diskfiletime"] = info.ModTime().UTC().Format("2006-01-02T15:04:05")
 	metadata["diskfilename"] = filename
 	metadata["diskfilesize"] = fmt.Sprintf("%099d", info.Size())

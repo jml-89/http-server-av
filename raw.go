@@ -333,7 +333,6 @@ var starterTemplates = map[string]string{
 `,
 	"init": `
 [
-	"create table if not exists favourites (filename text, primary key (filename));"
 ]
 `,
 }
@@ -377,7 +376,7 @@ var routeDefaults = map[string]map[string]string{
 	"/favourites/": {
 		"alias":    "Favourites",
 		"method":   "get",
-		"template": "index",
+		"redirect": "/search?terms=favourite:true",
 	},
 
 	"/favourites/remove": {
@@ -421,10 +420,6 @@ var routeDefaultValues = map[string]map[string]string{
 // :variable are sourced from request parameters
 var routeDefaultQueries = map[string]map[string]string{
 	"/watch": {
-		"favourite": `
-			select filename from favourites where filename is :filename;
-		`,
-
 		"related": `
 			with wordcount(filename, num) as (
 				select 
@@ -558,28 +553,19 @@ var routeDefaultQueries = map[string]map[string]string{
 		`,
 	},
 
-	"/favourites/": {
-		"videos": `
-			select a.filename, a.val 
-			from favourites b join tags a 
-			on a.filename = b.filename 
-			where a.name is 'thumbname'
-			order by b.rowid desc;
-		`,
-	},
-
 	"/favourites/add": {
 		"query": `
 			insert or ignore into 
-				favourites (filename) 
-				values (:filename);
+			tags (filename, name, val)
+			values (:filename, 'favourite', 'true');
 		`,
 	},
 
 	"/favourites/remove": {
 		"query": `
-			delete from favourites 
-			where filename is :filename;
+			delete from tags 
+			where filename is :filename
+			and name is 'favourite';
 		`,
 	},
 }
