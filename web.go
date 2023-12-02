@@ -278,7 +278,6 @@ func superSoftServe(db *sql.DB, key string, w http.ResponseWriter, req *http.Req
 		return
 	}
 
-
 	// for the time being only the first value for each key is taken
 	args := make([]any, 0, 10)
 	for k, vs := range req.Form {
@@ -446,15 +445,8 @@ func runQuery(db *sql.DB, query string, args []any) ([][]string, error) {
 	var rows *sql.Rows
 	var err error
 	if len(args) == 0 {
-		//log.Printf("%s\n", query)
 		rows, err = db.Query(query)
 	} else {
-		/*
-		log.Printf("Query: %s\n", query)
-		for _, arg := range args {
-			log.Printf("\t%v\n", arg)
-		}
-		*/
 		rows, err = db.Query(query, args...)
 	}
 	if err != nil {

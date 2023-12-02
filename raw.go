@@ -136,7 +136,7 @@ var starterTemplates = map[string]string{
 		<h1>{{if .title}}{{.title}}{{else}}{{.filename}}{{end}}</h1>
 	</div>
 
-	{{if .favourite}}
+	{{if eq .favourite "true"}}
 	<form id="remove-from-favourites" action="/favourites/remove" method="post">
 		<input type="hidden" name="filename" value="{{.filename}}">
 		<input type="submit" value="Remove from Favourites">
@@ -408,10 +408,10 @@ var routeDefaults = map[string]map[string]string{
 
 var routeDefaultValues = map[string]map[string]string{
 	"/search": {
-		"pagenumber": "0",
+		"pagenumber":   "0",
 		"sortcriteria": "diskfiletime",
-		"sortorder": "desc",
-		"issearch": "1",
+		"sortorder":    "desc",
+		"issearch":     "1",
 	},
 }
 

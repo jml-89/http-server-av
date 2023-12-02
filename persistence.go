@@ -1030,7 +1030,6 @@ func parseSearchTerms(formterms []string) SearchParameters {
 
 		basegrow := func(x int) {
 			if i > lo {
-				//log.Printf("Term: %s\n", term[lo:i+x])
 				terms = append(terms, term[lo:i+x])
 			}
 			lo = i + 1
@@ -1087,13 +1086,6 @@ func parseSearchTerms(formterms []string) SearchParameters {
 		i = len(term)
 		grow()
 	}
-
-	/*
-	log.Printf("Terms:\n")
-	for _, term := range terms {
-		log.Printf("\t%s\n", term)
-	}
-	*/
 
 	params := SearchParameters{
 		Vals:    make([]string, 0, 50),
@@ -1185,5 +1177,5 @@ func runTemplateQueries(db *sql.DB, key string, inserts map[string]string, args 
 		queryResults[name] = elems
 	}
 
-	return queryResults, err 
+	return queryResults, err
 }
