@@ -1,10 +1,5 @@
 package main
 
-// TODO#1
-// Streaming media
-// TODO#2
-// Javascript player
-
 import (
 	"database/sql"
 	"flag"
@@ -15,12 +10,14 @@ import (
 	_ "net/http/pprof"
 	"os"
 	"os/signal"
-	"path/filepath"
+
+	"github.com/jml-89/httpfileserve/internal/av"
+	"github.com/jml-89/httpfileserve/internal/web"
 )
 
 var flagPort = flag.Int("port", 8080, "webserver port")
 var flagPath = flag.String("path", ".", "directory to serve")
-var flagPathDB = flag.String("db", "info.db", "media info database path")
+var flagPathDB = flag.String("db", ".info.db", "media info database path")
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
@@ -52,43 +49,31 @@ func main() {
 	}
 	defer db.Close()
 
-	log.Printf("Initialising database...\n")
-	err = initDB(db)
+	log.Printf("Initialising database: av side...\n")
+	err = av.InitDB(db)
+	if err != nil {
+		log.Fatalf("Failed to initialise DB tables: %s\n", err)
+	}
+
+	log.Printf("Initialising database: web side...\n")
+	err = web.InitDB(db)
 	if err != nil {
 		log.Fatalf("Failed to initialise DB tables: %s\n", err)
 	}
 
 	http.Handle("/file/", http.StripPrefix("/file/", http.FileServer(http.Dir(pathMedia))))
-	http.HandleFunc("/tmb/", serveThumbs(db))
-	err = addRoutes(db)
+	http.HandleFunc("/tmb/", web.ServeThumbs(db))
+	err = web.AddRoutes(db)
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	log.Printf("Adding media files to database...\n")
-	count, err := addFilesToDB(db, pathMedia)
+	count, err := av.AddFilesToDB(db, pathMedia)
 	if err != nil {
 		log.Fatal(err)
 	}
 	log.Printf("%v files added to database\n", count)
-
-	log.Printf("Building word association table...\n")
-	err = wordassocs(db)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	log.Printf("Fixing tags...\n")
-	err = fixtags(db)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	log.Printf("Culling missing files...\n")
-	err = cullMissing(db, pathMedia)
-	if err != nil {
-		log.Fatal(err)
-	}
 
 	terminate := make(chan os.Signal)
 	signal.Notify(terminate, os.Interrupt)
@@ -103,34 +88,4 @@ func main() {
 	}
 
 	return
-}
-
-func recls(dir string) ([]string, error) {
-	files := make([]string, 0, 128)
-
-	var ls func(string) error
-	ls = func(dir string) error {
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			return err
-		}
-
-		for _, entry := range entries {
-			path := filepath.Join(dir, entry.Name())
-			if entry.IsDir() {
-				err = ls(path)
-				if err != nil {
-					return err
-				}
-				continue
-			}
-			files = append(files, path)
-		}
-
-		return nil
-	}
-
-	err := ls(dir)
-
-	return files, err
 }
