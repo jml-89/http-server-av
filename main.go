@@ -4,12 +4,14 @@ import (
 	"database/sql"
 	"flag"
 	"fmt"
-	_ "github.com/mattn/go-sqlite3"
+	"github.com/mattn/go-sqlite3"
 	"log"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
 	"os/signal"
+
+	"math"
 
 	"github.com/jml-89/httpfileserve/internal/av"
 	"github.com/jml-89/httpfileserve/internal/web"
@@ -18,6 +20,10 @@ import (
 var flagPort = flag.Int("port", 8080, "webserver port")
 var flagPath = flag.String("path", ".", "directory to serve")
 var flagPathDB = flag.String("db", ".info.db", "media info database path")
+
+func mySqrt(x int) int {
+	return int(math.Sqrt(float64(x)))
+}
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
@@ -42,8 +48,19 @@ func main() {
 		done <- true
 	}()
 
+	// Dude, just use
+	//   go build -tags sqlite_math_functions
+	// Was NOT working for me
+	// This is a super cool feature though
+	// So easy to connect a Go func to sqlite3!
+	sql.Register("sqlite3_with_square_root", &sqlite3.SQLiteDriver{
+		ConnectHook: func(conn *sqlite3.SQLiteConn) error {
+			return conn.RegisterFunc("sqrt", mySqrt, true)
+		},
+	})
+
 	log.Printf("Opening database %s\n", pathDb)
-	db, err := sql.Open("sqlite3", pathDb)
+	db, err := sql.Open("sqlite3_with_square_root", pathDb)
 	if err != nil {
 		log.Fatalf("Failed to open %s: %s\n", pathDb, err)
 	}

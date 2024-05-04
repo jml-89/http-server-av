@@ -2,9 +2,7 @@ package av
 
 import (
 	"database/sql"
-	//"encoding/json"
 	"errors"
-	//"fmt"
 	_ "github.com/mattn/go-sqlite3"
 	"log"
 	"os"

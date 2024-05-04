@@ -44,6 +44,10 @@ import (
 	"log"
 	"os"
 	"unsafe"
+	"bytes"
+
+	"golang.org/x/crypto/blake2b"
+	"encoding/hex"
 )
 
 var errNotMediaFile = errors.New("File is not an image or video")
@@ -68,17 +72,123 @@ func parseMediaFile(filename string) ([]byte, map[string]string, error) {
 	thumbnail, err := CreateThumbnail(filename)
 	if err != nil {
 		log.Printf("Failed to generate thumbnail for %s", filename)
-		//return nil, nil, err
+		// We don't bail out here because it's not the end of the world
+	} else { 
+		digest, err := Checksum(thumbnail)
+		if err != nil {
+			log.Printf("Failed to generate checksum for %s", filename)
+		} else {
+			metadata["digest"] = digest
+			metadata["thumbname"] = fmt.Sprintf("%s.webp", digest)
+		}
 	}
 
 	metadata["favourite"] = "false"
 	metadata["diskfiletime"] = info.ModTime().UTC().Format("2006-01-02T15:04:05")
 	metadata["diskfilename"] = filename
 	metadata["diskfilesize"] = fmt.Sprintf("%099d", info.Size())
-	thumbname := fmt.Sprintf("%s.webp", filename)
-	metadata["thumbname"] = thumbname
+
+	if _, ok := metadata["thumbname"]; !ok {
+		metadata["thumbname"] = fmt.Sprintf("%s.webp", filename)
+	}
 
 	return thumbnail, metadata, nil
+}
+
+// Some files could be the same video with different metadata
+// A checksum of the video stream should answer the duplicate question
+// Does not decode, just demuxes and digests raw packet data 
+func MediaChecksum(path string) (string, error) {
+	pathInArg := C.CString(path)
+	defer C.free(unsafe.Pointer(pathInArg))
+
+	var ctxFmtIn *C.AVFormatContext = nil
+	err := avop(C.avformat_open_input(&ctxFmtIn, pathInArg, nil, nil))
+	if err != nil {
+		return "", err
+	}
+	defer C.avformat_close_input(&ctxFmtIn)
+
+	err = avop(C.avformat_find_stream_info(ctxFmtIn, nil))
+	if err != nil {
+		log.Printf("%s: %s\n", path, err)
+		return "", err
+	}
+
+	idxStream, ctxDec, err := OpenBestStream(ctxFmtIn, C.AVMEDIA_TYPE_VIDEO)
+	if err != nil {
+		return "", err
+	}
+	defer C.avcodec_free_context(&ctxDec)
+
+	pktDec := C.av_packet_alloc()
+	defer C.av_packet_free(&pktDec)
+
+	hasher, err := blake2b.New512(nil)
+	if err != nil {
+		return "", err
+	}
+
+	for true {
+		err = avop(C.av_read_frame(ctxFmtIn, pktDec))
+		if err != nil {
+			if err.Error() != "End of file" {
+				log.Printf("%s: %s\n", path, err)
+			}
+			break
+		}
+		defer C.av_packet_unref(pktDec)
+
+		if pktDec.stream_index != C.int(idxStream) || pktDec.buf == nil {
+			continue
+		}
+
+		// GoByte copies the C bytes, don't get too excited about perfomance
+		b := C.GoBytes(unsafe.Pointer(pktDec.buf.data), pktDec.buf.size)
+
+		_, err = hasher.Write(b)
+		if err != nil {
+			return "", err
+		}
+	}
+
+
+	return hex.EncodeToString(hasher.Sum(nil)), nil
+}
+
+func Checksum(b []byte) (string, error) {
+	fi := bytes.NewReader(b)
+	
+	hasher, err := blake2b.New512(nil)
+	if err != nil {
+		return "", err
+	}
+
+	_, err = io.Copy(hasher, fi)
+	if err != nil {
+		return "", err
+	}
+
+	return hex.EncodeToString(hasher.Sum(nil)), nil
+}
+
+func FileChecksum(path string) (string, error) {
+	fi, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+
+	hasher, err := blake2b.New512(nil)
+	if err != nil {
+		return "", err
+	}
+
+	_, err = io.Copy(hasher, fi)
+	if err != nil {
+		return "", err
+	}
+
+	return hex.EncodeToString(hasher.Sum(nil)), nil
 }
 
 func GetMetadata(path string) (map[string]string, error) {

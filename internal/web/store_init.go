@@ -20,6 +20,12 @@ func InitDB(db *sql.DB) error {
 		return err
 	}
 
+	err = DropAll(db)
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+
 	err = initRoutes(db)
 	if err != nil {
 		log.Println(err)
@@ -41,6 +47,17 @@ func InitDB(db *sql.DB) error {
 	log.Println("Database initialised")
 
 	return nil
+}
+
+func DropAll(db *sql.DB) error {
+	_, err := db.Exec(`
+		drop table routes;
+		drop table routevalues;
+		drop table templatequeries;
+		drop table templates;
+		drop table templatesearches;
+	`)
+	return err
 }
 
 func initRoutesCore(db *sql.DB) error {

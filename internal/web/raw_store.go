@@ -71,6 +71,12 @@ var routeDefaults = map[string]map[string]string{
 		"method":   "post",
 		"redirect": "/templates/",
 	},
+	
+	"/duplicates/": {
+		"alias": "Duplicates",
+		"method": "get",
+		"template": "duplicates",
+	},
 }
 
 var routeDefaultValues = map[string]map[string]string{
@@ -222,9 +228,11 @@ var routeDefaultQueries = map[string]map[string]string{
 			group by 
 				b.word
 			having 
-				count(b.word) < (num.cnt/2)
+				count(b.word) < sqrt(num.cnt)
+			and 
+				count(b.word) > (sqrt(num.cnt) / 2)
 			order by
-				count(b.word) desc
+				random()
 			limit 
 				10;
 		`,
@@ -243,6 +251,16 @@ var routeDefaultQueries = map[string]map[string]string{
 			insert or replace into
 			tags (filename, name, val)
 			values (:filename, 'favourite', 'false');
+		`,
+	},
+
+	"/duplicates/": {
+		"dupes": `
+			select val, count(*)
+			from tags
+			where name = 'thumbname'
+			group by val
+			having count(*) > 1;
 		`,
 	},
 }

@@ -63,7 +63,6 @@ var starterTemplates = map[string]string{
 
 				display: flex;
 				flex-direction: row;
-				justify-content: space-between;
 				gap: 0.5rem;
 			}
 
@@ -117,7 +116,7 @@ var starterTemplates = map[string]string{
 
 				display: flex;
 				flex-direction: column;
-				align-items: center;
+				align-items: stretch;
 			}
 
 			.thumb-img {
@@ -127,10 +126,14 @@ var starterTemplates = map[string]string{
 			.media-title {
 				font-size: 1.75rem;
 				font-weight: 300;
+				text-wrap: pretty;
+				overflow-wrap: break-word;
 			}
 
 			pre {
 				font: 100% sans-serif;
+				overflow-wrap: break-word;
+				text-wrap: pretty;
 			}
 
 			.flexy-col {
@@ -161,6 +164,66 @@ var starterTemplates = map[string]string{
 
 			video {
 				object-fit: contain;
+			}
+
+			@media screen and (width > 1280px) {
+				.nav-bar {
+					gap: 1rem;
+					font-size: 1.5rem;
+				}
+
+				.search-box {
+					font-size: 1.5rem;
+					border-radius: 1rem;
+				}
+
+				.big-button {
+					font-size: 1.5rem;
+					border-radius: 1rem;
+				}
+
+				.search-refinements div {
+					font-size: 1.5rem;
+				}
+
+				.search-refinements input {
+					font-size: 1rem;
+					border-radius: 0.5rem;
+					padding: 0.25rem;
+				}
+
+				.search-refinement-words div {
+					font-size: 1.5rem;
+				}
+
+				.search-refinement-words input {
+					font-size: 1rem;
+					border-radius: 0.5rem;
+					padding: 0.25rem;
+				}
+
+				.media-title {
+					font-size: 1.5rem;
+					font-weight: 400;
+				}
+
+				.media-item {
+					width: 480px;
+				}
+
+				.thumbs {
+					display: flex;
+					flex-direction: row;
+					flex-wrap: wrap;
+					align-items: flex-start;
+					gap: 0.75rem;
+				}
+			}
+
+			@media screen and (width < 960px) {
+				.media-item {
+					width: 480px;
+				}
 			}
 		</style>
 
@@ -206,6 +269,20 @@ var starterTemplates = map[string]string{
 		<input class="big-button" type="submit" value="{{index $elem 0}}">
 	</form>
 {{end}}
+`,
+	"duplicates": `
+	<h1>Files That Appear To Be Duplicates</h1>
+	<div>If two files generate the same thumbnail, they're very likely to be duplicates</div>
+	<div>Do not consider this an exhaustive duplicate check</div>
+
+	<div class="thumbs">
+	{{range $idx, $elem := .dupes}}
+	<a class="media-item" href="/search?terms=thumbname:&quot;{{index $elem 0 | escapequery}}&quot;">
+		<img class="thumb-img" src="/tmb/{{index $elem 0 | escapepath}}"/>
+		<div class="media-title">{{index $elem 1}} duplicates</div>
+	</a>
+	{{end}}
+	</div>
 `,
 	"video": `
 	{{if eq .mediatype "video"}}
