@@ -1,0 +1,65 @@
+{{if eq .mediatype "video"}}
+<video controls>
+	<source src="/file/{{.diskfilename | escapepath}}">
+	<a href="/file/{{.diskfilename | escapepath}}">Download</a>
+</video>
+{{else if eq .mediatype "audio"}}
+<audio controls>
+	<source src="/file/{{.filename | escapepath}}">
+	<a href="/file/{{.filename | escapepath}}">Download</a>
+</audio>
+{{else if eq $.mediatype "image"}}
+<img src="/file/{{.filename | escapepath}}"/>
+{{else}}
+<h3>Unknown media type "{{.mediatype}}"</h3>
+{{end}}
+
+<div class="video-title">
+	<h1>{{if .title}}{{.title}}{{else}}{{.filename}}{{end}}</h1>
+</div>
+
+{{if eq .favourite "true"}}
+<form id="remove-from-favourites" action="/favourites/remove" method="post">
+	<input type="hidden" name="filename" value="{{.filename}}">
+	<input class="big-button" type="submit" value="Remove from Favourites">
+</form>
+{{else}}
+<form id="add-to-favourites" action="/favourites/add" method="post">
+	<input type="hidden" name="filename" value="{{.filename}}">
+	<input class="big-button" type="submit" value="Add to Favourites">
+</form>
+{{end}}
+
+<div class="video-description">
+	{{if .artist}}<h2>Created by <a href="/search?terms=artist:&quot;{{.artist}}&quot;">{{.artist}}</a></h2>{{end}}
+	{{if .date}}
+	<h2>Published on {{.date}}</h2>
+	{{else}}
+	<h2>File date is {{.diskfiletime}}</h2>
+	{{end}}
+	{{if .description}}<pre>{{.description}}</pre>{{end}}
+</div>
+
+<h1>Related Videos</h1>
+<div class="thumbs">
+{{range $idx, $elem := .related}}
+	<a class="media-item" href="/watch?filename={{index $elem 0 | escapequery}}{{if $.terms}}&terms={{$.terms}}{{end}}">
+		<img class="thumb-img" src="/tmb/{{index $elem 1 | escapepath}}"/>
+		<div class="media-title">{{index $elem 0 | prettyprint}}</div>
+	</a>
+{{end}}
+</div>
+
+{{if 0}}
+<h1>Page Data</h1>
+<table>
+	<tbody>
+	{{range $k, $v := .}}
+		<tr>
+			<td>{{$k}}</td>
+			<td>{{$v}}</td>
+		</tr>
+	{{end}}
+	</tbody>
+</table> 
+{{end}}

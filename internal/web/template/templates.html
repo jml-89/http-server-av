@@ -1,0 +1,6 @@
+{{range $idx, $elem := .elements}}
+	<form class="flexy-col" id="form-{{index $elem 0}}" action="edit" method="get">
+		<input type="hidden" name="name" value="{{index $elem 0}}">
+		<input class="big-button" type="submit" value="{{index $elem 0}}">
+	</form>
+{{end}}

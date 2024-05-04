@@ -1,0 +1,9 @@
+{{range $idx, $elem := .element}}
+<form class="mega-flexy-col" id="form-{{index $elem 0}}" action="add" method="post">
+	<h2>Template Editor: {{index $elem 0}}</h2>
+	<textarea class="big-text-box" name="raw">{{index $elem 1}}</textarea>
+	<input type="hidden" name="name" value="{{index $elem 0}}">
+	<input type="hidden" name="previous" value="{{index $elem 2}}">
+	<input class="big-button" type="submit" value="Update">
+</form>
+{{end}}

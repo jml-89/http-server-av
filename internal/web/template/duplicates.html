@@ -1,0 +1,12 @@
+<h1>Files That Appear To Be Duplicates</h1>
+<div>If two files generate the same thumbnail, they're very likely to be duplicates</div>
+<div>Do not consider this an exhaustive duplicate check</div>
+
+<div class="thumbs">
+{{range $idx, $elem := .dupes}}
+<a class="media-item" href="/search?terms=thumbname:&quot;{{index $elem 0 | escapequery}}&quot;">
+	<img class="thumb-img" src="/tmb/{{index $elem 0 | escapepath}}"/>
+	<div class="media-title">{{index $elem 1}} duplicates</div>
+</a>
+{{end}}
+</div>

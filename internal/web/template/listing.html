@@ -1,0 +1,11 @@
+<form action="{{.path}}" method="post">
+<ol>
+	{{range $idx, $elem := .elements}}
+	<li>
+		<input type="checkbox" name="elements" value="{{.}}">
+		<a href="/search?terms={{. | escapequery}}">{{.}}</a>
+	</li>
+	{{end}}
+</ol>
+<button type="submit">Remove</button>
+</form>

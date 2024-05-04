@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html>
+	<head>
+		<style>
+			body {
+				display: flex;
+				flex-direction: column;
+				min-height: 100dvh;
+				justify-content: flex-start;
+				gap: 0.5rem;
+			}
+
+			.nav-bar {
+				display: flex;
+				flex-direction: row;
+				gap: 1rem;
+
+				font-size: 3rem;
+			}
+
+			.search-area {
+				align-self: stretch;
+
+				display: flex;
+				flex-direction: row;
+				justify-content: stretch;
+				gap: 0.25rem;
+			}
+
+			.search-box {
+				min-width: 5rem;
+				flex: 1 1 0%;
+				font-size: 3rem;
+				border-radius: 1rem;
+			}
+
+			.big-button {
+				font-size: 3rem;
+				border-radius: 1rem;
+			}
+
+			.thumbs {
+				display: flex;
+				flex-direction: column;
+				align-items: center;
+				gap: 1.25rem;
+			}
+
+			.refinement-area {
+
+				display: flex;
+				flex-direction: row;
+				gap: 0.5rem;
+			}
+
+			.search-refinements {
+				display: flex;
+				flex-direction: column;
+				gap: 0.5rem;
+			}
+
+			.search-refinements div {
+				font-size: 2.5rem;
+			}
+
+			.search-refinements input {
+				font-size: 2rem;
+				border-radius: 0.5rem;
+				padding: 0.25rem;
+			}
+
+			.search-refinement-words {
+				flex: 1 1 0%;
+
+				display: flex;
+				flex-direction: column;
+				gap: 0.5rem;
+			}
+
+			.refine-words {
+				display: flex;
+				flex-direction: row;
+				flex-wrap: wrap;
+				gap: 0.5rem;
+			}
+
+			.search-refinement-words div {
+				font-size: 2.5rem;
+			}
+
+			.search-refinement-words input {
+				font-size: 2rem;
+				border-radius: 0.5rem;
+				padding: 0.25rem;
+			}
+
+			.selected {
+				font-weight: 700;
+			}
+
+			.media-item {
+				width: 960px;
+				display: flex;
+				flex-direction: column;
+			}
+
+			.thumb-img {
+				object-fit: contain;
+			}
+
+			.media-title {
+				font-size: 1.75rem;
+				font-weight: 300;
+				text-wrap: pretty;
+				overflow-wrap: break-word;
+			}
+
+			pre {
+				font: 100% sans-serif;
+				overflow-wrap: break-word;
+				text-wrap: pretty;
+			}
+
+			.flexy-col {
+				display: flex;
+				flex-direction: column;
+				gap: 0.25rem;
+				align-items: baseline;
+			}
+
+			.stretchy-item {
+				align-self: stretch;
+			}
+
+			.mega-flexy-col {
+				flex: 1 1 0%;
+
+				display: flex;
+				flex-direction: column;
+				justify-content: flex-end;
+				gap: 0.25rem;
+				align-items: baseline;
+			}
+
+			.big-text-box {
+				align-self: stretch;
+				flex: 1 1 0%;
+			}
+
+			video {
+				object-fit: contain;
+			}
+
+			@media screen and (width > 1280px) {
+				.nav-bar {
+					gap: 1rem;
+					font-size: 1.5rem;
+				}
+
+				.search-box {
+					font-size: 1.5rem;
+					border-radius: 1rem;
+				}
+
+				.big-button {
+					font-size: 1.5rem;
+					border-radius: 1rem;
+				}
+
+				.search-refinements div {
+					font-size: 1.5rem;
+				}
+
+				.search-refinements input {
+					font-size: 1rem;
+					border-radius: 0.5rem;
+					padding: 0.25rem;
+				}
+
+				.search-refinement-words div {
+					font-size: 1.5rem;
+				}
+
+				.search-refinement-words input {
+					font-size: 1rem;
+					border-radius: 0.5rem;
+					padding: 0.25rem;
+				}
+
+				.media-title {
+					font-size: 1.5rem;
+					font-weight: 400;
+				}
+
+				.media-item {
+					width: 480px;
+				}
+
+				.thumbs {
+					display: flex;
+					flex-direction: row;
+					flex-wrap: wrap;
+					align-items: flex-start;
+					gap: 0.75rem;
+				}
+			}
+
+			@media screen and (width < 960px) {
+				.media-item {
+					width: 480px;
+				}
+			}
+		</style>
+
+		<title>Typing At Computers</title>
+	</head>
+	<body>
+		<nav class="nav-bar">
+			<a href="/">Home</a>
+
+			{{range $i, $e := .routes}}
+			{{if .Alias}}
+			<a href="{{.Path}}">{{.Alias}}</a>
+			{{end}}
+			{{end}}
+		</nav>
+		<form class="search-area" action="/search" method="get">
+			<input type="text" class="search-box" name="terms" id="search-terms" value="{{.terms}}" required>
+			<input type="hidden" name="sortcriteria" id="sort-criteria" value="diskfilename">
+			<input type="hidden" name="sortorder" id="sort-order" value="random">
+			<input type="hidden" name="pagenumber" id="page-number" value="0">
+			<input class="big-button" type="submit" value="Search">
+		</form>
+
+		{{template "body" .}}
+	</body>
+</html>

@@ -1,0 +1,126 @@
+{{if .issearch}}
+<div class="refinement-area">
+
+<div class="search-refinements">
+	<div>Sort By</div>
+
+	<form action="/search" method="get">
+		<input type="hidden" name="terms" value="{{$.terms}}" required>
+		<input type="hidden" name="sortcriteria" value="diskfilename">
+		<input type="hidden" name="sortorder" id="sort-order" value="desc">
+		<input type="hidden" name="pagenumber" value="0">
+		<input {{if eq $.sortcriteria "diskfilename"}}class="selected"{{end}} type="submit" value="Filename">
+	</form>
+
+	<form action="/search" method="get">
+		<input type="hidden" name="terms" value="{{$.terms}}" required>
+		<input type="hidden" name="sortcriteria" value="diskfiletime">
+		<input type="hidden" name="sortorder" id="sort-order" value="desc">
+		<input type="hidden" name="pagenumber" value="0">
+		<input {{if eq $.sortcriteria "diskfiletime"}}class="selected"{{end}} type="submit" value="Date/Time">
+	</form>
+
+	<form action="/search" method="get">
+		<input type="hidden" name="terms" value="{{$.terms}}" required>
+		<input type="hidden" name="sortcriteria" value="duration">
+		<input type="hidden" name="sortorder" id="sort-order" value="desc">
+		<input type="hidden" name="pagenumber" value="0">
+		<input {{if eq $.sortcriteria "duration"}}class="selected"{{end}} type="submit" value="Duration">
+	</form>
+
+	<form action="/search" method="get">
+		<input type="hidden" name="terms" value="{{$.terms}}" required>
+		<input type="hidden" name="sortcriteria" value="diskfilesize">
+		<input type="hidden" name="sortorder" id="sort-order" value="desc">
+		<input type="hidden" name="pagenumber" value="0">
+		<input {{if eq $.sortcriteria "diskfilesize"}}class="selected"{{end}} type="submit" value="Filesize">
+	</form>
+</div>
+
+<div class="search-refinements">
+	<div>Sort Order</div>
+
+	<form action="/search" method="get">
+		<input type="hidden" name="terms" value="{{$.terms}}" required>
+		<input type="hidden" name="sortcriteria" value="{{$.sortcriteria}}">
+		<input type="hidden" name="sortorder" id="sort-order" value="asc">
+		<input type="hidden" name="pagenumber" value="0">
+		<input {{if eq $.sortorder "asc"}}class="selected"{{end}}type="submit" value="Ascending">
+	</form>
+
+	<form action="/search" method="get">
+		<input type="hidden" name="terms" value="{{$.terms}}" required>
+		<input type="hidden" name="sortcriteria" value="{{$.sortcriteria}}">
+		<input type="hidden" name="sortorder" id="sort-order" value="desc">
+		<input type="hidden" name="pagenumber" value="0">
+		<input {{if eq $.sortorder "desc"}}class="selected"{{end}}type="submit" value="Descending">
+	</form>
+
+	<form action="/search" method="get">
+		<input type="hidden" name="terms" value="{{$.terms}}" required>
+		<input type="hidden" name="sortcriteria" value="{{$.sortcriteria}}">
+		<input type="hidden" name="sortorder" id="sort-order" value="random">
+		<input type="hidden" name="pagenumber" value="0">
+		<input {{if eq $.sortorder "random"}}class="selected"{{end}}type="submit" value="Random">
+	</form>
+</div>
+
+{{if .refinements}}
+<div class="search-refinement-words">
+	<div>Refinements</div>
+
+	<div class="refine-words">
+	{{range $i, $e := .refinements}}
+	<form action="/search" method="get">
+		<input type="hidden" name="terms" value="{{$.terms}} {{$e}}" required>
+		<input type="hidden" name="sortcriteria" value="{{$.sortcriteria}}">
+		<input type="hidden" name="sortorder" id="sort-order" value="{{$.sortorder}}">
+		<input type="hidden" name="pagenumber" value="{{$.pagenumber}}">
+		<input type="submit" value="{{$e}}">
+	</form>
+	{{end}}
+	</div>
+</div>
+{{end}}
+
+{{if 0}}
+<div class="search-refinements">
+	<div>Page: {{$.pagenumber}}</div>
+
+	<form action="/search" method="get">
+		<input type="hidden" name="terms" value="{{$.terms}}" required>
+		<input type="hidden" name="sortcriteria" value="{{$.sortcriteria}}">
+		<input type="hidden" name="sortorder" id="sort-order" value="{{$.sortorder}}">
+		<input type="hidden" name="pagenumber" value="{{$.nextpagenumber}}">
+		<input type="submit" value="Next">
+	</form>
+</div>
+{{end}}
+</div>
+{{end}}
+
+<div class="thumbs">
+{{range $idx, $elem := .videos}}
+	<a class="media-item" href="/watch?filename={{index $elem 0 | escapequery}}{{if $.terms}}&terms={{$.terms}}{{end}}">
+		<img class="thumb-img" src="/tmb/{{index $elem 1 | escapepath}}"/>
+		<div class="media-title">{{index $elem 0 | prettyprint}}</div>
+	</a>
+{{end}}
+</div>
+
+{{if .issearch}}
+<div class="bottom-zone">
+	<div class="search-refinements">
+		<div>Page</div>
+
+		<form action="/search" method="get">
+			<input type="hidden" name="terms" value="{{$.terms}}" required>
+			<input type="hidden" name="sortcriteria" value="{{$.sortcriteria}}">
+			<input type="hidden" name="sortorder" id="sort-order" value="{{$.sortorder}}">
+			<input type="hidden" name="pagenumber" value="{{$.nextpagenumber}}">
+			<input type="submit" value="Next">
+		</form>
+	</div>
+</div>
+{{end}}
+

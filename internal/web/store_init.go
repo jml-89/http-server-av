@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	_ "github.com/mattn/go-sqlite3"
 	"log"
+	"path/filepath"
 )
 
 func InitDB(db *sql.DB) error {
@@ -51,11 +52,11 @@ func InitDB(db *sql.DB) error {
 
 func DropAll(db *sql.DB) error {
 	_, err := db.Exec(`
-		drop table routes;
-		drop table routevalues;
-		drop table templatequeries;
-		drop table templates;
-		drop table templatesearches;
+		drop table if exists routes;
+		drop table if exists routevalues;
+		drop table if exists templatequeries;
+		drop table if exists templates;
+		drop table if exists templatesearches;
 	`)
 	return err
 }
@@ -325,8 +326,19 @@ func initTemplates(db *sql.DB) error {
 	}
 	defer stmtUpdate.Close()
 
-	for name, raw := range starterTemplates {
-		_, err = stmtUpdate.Exec(name, raw)
+	entries, err := starterTemplates.ReadDir("template")
+	for _, entry := range entries {
+		path := filepath.Join("template", entry.Name())
+		b, err := starterTemplates.ReadFile(path)
+		if err != nil {
+			log.Println(err)
+			return err
+		}
+
+		name := entry.Name()
+		name = name[:len(name)-5]
+
+		_, err = stmtUpdate.Exec(name, string(b))
 		if err != nil {
 			log.Println(err)
 			return err
