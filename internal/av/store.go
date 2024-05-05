@@ -13,16 +13,6 @@ import (
 func InitDB(db *sql.DB) error {
 	log.Println("Initialising database")
 
-	// WAL creates a few secondary files but generally I like it more
-	// find it plays nicer in general with most systems
-	// There's also WAL2 which addresses the ever-expanding write log problem
-	// But I don't think WAL2 is a standard feature yet
-	_, err := db.Exec("pragma journal_mode = wal;")
-	if err != nil {
-		log.Println(err)
-		return err
-	}
-
 	tx, err := db.Begin()
 	if err != nil {
 		log.Println(err)

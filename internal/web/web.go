@@ -19,7 +19,6 @@ type Route struct {
 
 type TemplateFill struct {
 	Routes []Route
-	//Constant map[string]string
 	Query  map[string]string
 	Search map[string]SearchBundle
 }
@@ -36,6 +35,7 @@ func ServeThumbs(db *sql.DB) func(http.ResponseWriter, *http.Request) {
 	}
 }
 
+// Adds routes to http default handler (global...)
 // Routes are stored in the database too
 // Everything is in the database...
 func AddRoutes(db *sql.DB) error {
@@ -167,12 +167,6 @@ func getSearchGear(db *sql.DB, key string, form url.Values) (map[string]string, 
 	return inserts, fills, err
 }
 
-func createSuperSoftServe(db *sql.DB, key string) http.HandlerFunc {
-	return func(w http.ResponseWriter, req *http.Request) {
-		superSoftServe(db, key, w, req)
-	}
-}
-
 func getFastLinks(db *sql.DB) ([]Route, error) {
 	rows, err := db.Query(`
 		select
@@ -229,6 +223,14 @@ func getTags(db *sql.DB, filename string) (map[string]string, error) {
 	return xs, err
 }
 
+func createSuperSoftServe(db *sql.DB, key string) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		superSoftServe(db, key, w, req)
+	}
+}
+
+//Nothing saved, everything pulled from the database every time
+//Good for development & testing phase
 func superSoftServe(db *sql.DB, key string, w http.ResponseWriter, req *http.Request) {
 	row := db.QueryRow(`
 		select
@@ -386,49 +388,5 @@ func superSoftServe(db *sql.DB, key string, w http.ResponseWriter, req *http.Req
 
 func emptyHandler(w http.ResponseWriter, req *http.Request) {
 	// nothing! wahey
-}
-
-func permutations(form map[string][]string) [][]sql.NamedArg {
-	link := make([][]sql.NamedArg, 0, len(form))
-	for k, vs := range form {
-		linkline := make([]sql.NamedArg, 0, len(vs))
-		for _, v := range vs {
-			s, err := url.QueryUnescape(v)
-			if err != nil {
-				s = v
-			}
-			linkline = append(linkline, sql.Named(k, s))
-		}
-		link = append(link, linkline)
-	}
-
-	var step func([][]sql.NamedArg) [][]sql.NamedArg
-	step = func(form [][]sql.NamedArg) [][]sql.NamedArg {
-		res := make([][]sql.NamedArg, 0, 10)
-		if len(form) < 1 {
-			return res
-		}
-
-		// last entry
-		if len(form) == 1 {
-			for _, x := range form[0] {
-				res = append(res, []sql.NamedArg{x})
-			}
-			return res
-		}
-
-		for _, x := range form[0] {
-			for _, ys := range step(form[1:]) {
-				zs := make([]sql.NamedArg, 0, len(form))
-				zs = append(zs, x)
-				zs = append(zs, ys...)
-				res = append(res, zs)
-			}
-		}
-
-		return res
-	}
-
-	return step(link)
 }
 

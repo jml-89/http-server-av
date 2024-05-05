@@ -1,4 +1,4 @@
-module github.com/jml-89/httpfileserve
+module github.com/jml-89/http-server-av
 
 go 1.22
 

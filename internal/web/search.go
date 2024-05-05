@@ -1,3 +1,7 @@
+//Search handling
+//Builds an SQL query out of the search parameters
+//Not ideal, but works
+
 package web
 
 import (

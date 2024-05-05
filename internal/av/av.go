@@ -453,7 +453,7 @@ func OpenBestStream(ctxFmt *C.AVFormatContext, avtype int32) (C.uint, *C.AVCodec
 var errSeekFailed = errors.New("Seek failed")
 
 func CreateThumbnail(pathIn string) ([]byte, error) {
-	tmpFile, err := os.CreateTemp(os.TempDir(), "httpfileserve-")
+	tmpFile, err := os.CreateTemp(os.TempDir(), "http-server-av-")
 	if err != nil {
 		log.Printf("%s", err)
 		return nil, err

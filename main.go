@@ -13,8 +13,8 @@ import (
 
 	"math"
 
-	"github.com/jml-89/httpfileserve/internal/av"
-	"github.com/jml-89/httpfileserve/internal/web"
+	"github.com/jml-89/http-server-av/internal/av"
+	"github.com/jml-89/http-server-av/internal/web"
 )
 
 var flagPort = flag.Int("port", 8080, "webserver port")
@@ -65,6 +65,15 @@ func main() {
 		log.Fatalf("Failed to open %s: %s\n", pathDb, err)
 	}
 	defer db.Close()
+
+	// WAL creates a few secondary files but generally I like it more
+	// find it plays nicer in general with most systems
+	// There's also WAL2 which addresses the ever-expanding write log problem
+	// But I don't think WAL2 is a standard feature yet
+	_, err = db.Exec("pragma journal_mode = wal;")
+	if err != nil {
+		log.Fatalf("Failed to set journal_mode to wal (??): %s", err)
+	}
 
 	log.Printf("Initialising database: av side...\n")
 	err = av.InitDB(db)

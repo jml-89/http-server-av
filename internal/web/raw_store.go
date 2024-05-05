@@ -234,7 +234,7 @@ var routeDefaultQueries = map[string]map[string]string{
 			order by
 				random()
 			limit 
-				10;
+				20;
 		`,
 	},
 
