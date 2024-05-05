@@ -32,5 +32,5 @@ Clone this repo, then run the following from inside it
 `go install`   
    
 Or just do    
-`go install github.com/jml-89/http-server-av`   
+`go install github.com/jml-89/http-server-av@latest`   
 
