@@ -3,6 +3,7 @@
 !*.go
 !*.h
 !*.c
+!*.onnx
 !*.hpp
 !*.cpp
 !*.mod
