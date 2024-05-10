@@ -173,7 +173,7 @@ func AddFilesToDB(db *sql.DB, path string) (int, error) {
 	replies := make(chan Reply)
 	requests := make(chan Request)
 
-	worker := func() {
+	worker := func(t *Thumbnailer) {
 		for {
 			select {
 			case req := <-requests:
@@ -188,7 +188,7 @@ func AddFilesToDB(db *sql.DB, path string) (int, error) {
 					return
 				}
 
-				tmb, mt, err := parseMediaFile(req.filename)
+				tmb, mt, err := parseMediaFile(t, req.filename)
 				req.respond <- Reply{
 					filename:  req.filename,
 					stopped:   false,
@@ -202,7 +202,12 @@ func AddFilesToDB(db *sql.DB, path string) (int, error) {
 
 	workerCount := 4
 	for i := 0; i < workerCount; i++ {
-		go worker()
+		thumber, err := NewThumbnailer()
+		if err != nil {
+			log.Println(err)
+			return count, err
+		}
+		go worker(thumber)
 	}
 
 	log.Printf("Scanning files with %d goroutines\n", workerCount)

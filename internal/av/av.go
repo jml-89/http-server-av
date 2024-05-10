@@ -7,7 +7,9 @@ package av
 
 /*
 #cgo CFLAGS: -Wall
-#cgo LDFLAGS: -lavformat -lavutil -lavcodec -lavfilter
+
+#cgo LDFLAGS: -L . 
+#cgo LDFLAGS: -lavformat -lavutil -lavcodec -lavfilter 
 
 #include "helpers.h"
 */
@@ -27,7 +29,7 @@ import (
 )
 
 var errNotMediaFile = errors.New("File is not an image or video")
-func parseMediaFile(filename string) ([]byte, map[string]string, error) {
+func parseMediaFile(t *Thumbnailer, filename string) ([]byte, map[string]string, error) {
 	info, err := os.Stat(filename)
 	if err != nil {
 		log.Println(err)
@@ -45,7 +47,7 @@ func parseMediaFile(filename string) ([]byte, map[string]string, error) {
 		return nil, nil, err
 	}
 
-	thumbnail, err := CreateThumbnail(filename)
+	thumbnail, err := CreateThumbnail(t, filename)
 	if err != nil {
 		log.Printf("Failed to generate thumbnail for %s", filename)
 		// We don't bail out here because it's not the end of the world
@@ -60,6 +62,7 @@ func parseMediaFile(filename string) ([]byte, map[string]string, error) {
 	}
 
 	metadata["favourite"] = "false"
+	metadata["newthumbnail"] = "true"
 	metadata["diskfiletime"] = info.ModTime().UTC().Format("2006-01-02T15:04:05")
 	metadata["diskfilename"] = filename
 	metadata["diskfilesize"] = fmt.Sprintf("%099d", info.Size())
@@ -428,32 +431,41 @@ func OpenBestStream(ctxFmt *C.AVFormatContext, avtype int32) (C.uint, *C.AVCodec
 
 var errSeekFailed = errors.New("Seek failed")
 
-func CreateThumbnail(pathIn string) ([]byte, error) {
-	tmpFile, err := os.CreateTemp(os.TempDir(), "http-server-av-")
+func CreateThumbnail(t *Thumbnailer, pathIn string) ([]byte, error) {
+	tmpFile, err := os.CreateTemp(os.TempDir(), "http-server-av.*.webp")
 	if err != nil {
 		log.Printf("%s", err)
 		return nil, err
 	}
 	defer os.Remove(tmpFile.Name())
 
-	err = CreateThumbnailX(pathIn, tmpFile.Name(), true)
-
-	// Some streams don't support seeking
-	// In this case just do a thumbnail of the first frame
-	// Better than nothing
-	if errors.Is(err, errSeekFailed) || fmt.Sprintf("%s", err) == "End of file" {
-		err = CreateThumbnailX(pathIn, tmpFile.Name(), false)
-		if err != nil {
-			log.Printf("%s: %s", pathIn, err)
-		}
+	t.Run(pathIn, tmpFile.Name())
+	info, err := os.Stat(tmpFile.Name())
+	if err != nil {
+		log.Println(err)
+		return nil, err
 	}
 
-	// When all else fails, go generic
-	if err != nil {
-		err = CreateGenericThumbnail(tmpFile.Name())
+	if info.Size() < 10 {
+		err = CreateThumbnailX(pathIn, tmpFile.Name(), true)
+
+		// Some streams don't support seeking
+		// In this case just do a thumbnail of the first frame
+		// Better than nothing
+		if errors.Is(err, errSeekFailed) || fmt.Sprintf("%s", err) == "End of file" {
+			err = CreateThumbnailX(pathIn, tmpFile.Name(), false)
+			if err != nil {
+				log.Printf("%s: %s", pathIn, err)
+			}
+		}
+
+		// When all else fails, go generic
 		if err != nil {
-			log.Printf("%s: %s", pathIn, err)
-			return nil, err
+			err = CreateGenericThumbnail(tmpFile.Name())
+			if err != nil {
+				log.Printf("%s: %s", pathIn, err)
+				return nil, err
+			}
 		}
 	}
 
