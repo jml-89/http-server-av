@@ -1,6 +1,10 @@
 *
 !.gitignore
 !*.go
+!*.h
+!*.c
+!*.hpp
+!*.cpp
 !*.mod
 !*.md
 !*.html
