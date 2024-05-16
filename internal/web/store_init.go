@@ -9,8 +9,6 @@ import (
 )
 
 func InitDB(db *sql.DB) error {
-	log.Println("Initialising database")
-
 	err := DropAll(db)
 	if err != nil {
 		log.Println(err)
@@ -34,8 +32,6 @@ func InitDB(db *sql.DB) error {
 		log.Println(err)
 		return err
 	}
-
-	log.Println("Database initialised")
 
 	return nil
 }

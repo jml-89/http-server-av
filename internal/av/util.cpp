@@ -4,7 +4,7 @@ float sigmoid_x(float x) {
 	return 1.f / (1.f + exp(-x));
 }
 
-std::vector<float> softmax(std::vector<float> xs) {
+std::vector<float> softmax(const std::vector<float>& xs) {
 	float sum = 0;
 	std::vector<float> ys;
 	for (const auto& x : xs) {
@@ -20,7 +20,7 @@ std::vector<float> softmax(std::vector<float> xs) {
 	return ys;
 }
 
-cv::Mat image_scale(cv::Mat x, int w, int h) {
+cv::Mat image_scale(const cv::Mat& x, int w, int h) {
 	cv::Mat y;
 	auto min_ratio = std::min(
 		static_cast<float>(w) / static_cast<float>(x.cols), 
@@ -30,7 +30,7 @@ cv::Mat image_scale(cv::Mat x, int w, int h) {
 	return y;
 }
 
-cv::Mat image_pad_square(cv::Mat x) {
+cv::Mat image_pad_square(const cv::Mat& x) {
 	if (x.cols == x.rows) {
 		return x;
 	}

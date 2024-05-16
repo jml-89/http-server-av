@@ -1,6 +1,7 @@
 #include "yolo.hpp"
 #include <opencv2/imgproc.hpp>
 #include <algorithm>
+#include <chrono>
 
 #include "util.hpp"
 
@@ -8,7 +9,7 @@
 #include <ranges>
 
 yolo_face::yolo_face(
-	std::string path_model, 
+	const std::string& path_model, 
 	float confidence_threshold, 
 	float nms_threshold
 ) : 
@@ -53,7 +54,7 @@ std::vector<proposal> yolo_face::nms_filter(const std::vector<proposal>& proposa
 	return filtered;
 }
 
-cv::Rect2i scale_box(cv::Rect2f box, cv::Mat image, cv::Mat output) {
+cv::Rect2i scale_box(const cv::Rect2f& box, const cv::Mat& image, const cv::Mat& output) {
 	auto stride = static_cast<int>(ceil(static_cast<float>(image.rows) / output.size[2]));
 	cv::Rect2i ret;
 	ret.x = box.x * stride;
@@ -63,8 +64,8 @@ cv::Rect2i scale_box(cv::Rect2f box, cv::Mat image, cv::Mat output) {
 	return ret;
 }
 
-std::vector<proposal> yolo_face::detect(cv::Mat image) {
-	image = image_pad_square(image_scale(image, width, height));
+std::vector<proposal> yolo_face::detect(const cv::Mat& image_in) {
+	auto image = image_pad_square(image_scale(image_in, width, height));
 
 	auto blob = cv::dnn::blobFromImage(
 		image, 
@@ -76,8 +77,12 @@ std::vector<proposal> yolo_face::detect(cv::Mat image) {
 	);
 	net.setInput(blob);
 
+	//const auto start { std::chrono::steady_clock::now() };
 	std::vector<cv::Mat> outputs;
 	net.forward(outputs, net.getUnconnectedOutLayersNames());
+	//const auto end { std::chrono::steady_clock::now() };
+	//const std::chrono::duration<double> elapsed{end - start};
+	//std::cout << elapsed << "\n";
 
 	std::vector<proposal> proposals;
 	for (const auto& output : outputs) {
@@ -93,12 +98,12 @@ std::vector<proposal> yolo_face::detect(cv::Mat image) {
 	return nms_filter(proposals);
 }
 
-std::vector<proposal> yolo_face::generate_proposals(cv::Mat output) {
+std::vector<proposal> yolo_face::generate_proposals(const cv::Mat& output) {
 	const int feat_h = output.size[2];
 	const int feat_w = output.size[3];
 	const int area = feat_w * feat_h;
 
-	// point arithmetic...
+	// pointer arithmetic...
 	auto ptr = reinterpret_cast<float*>(output.data);
 	auto ptr_cls = ptr + area * reg_max * 4;
 	auto ptr_kp = ptr + area * (reg_max * 4 + 1);
@@ -157,11 +162,11 @@ std::vector<proposal> yolo_face::generate_proposals(cv::Mat output) {
 	return proposals;
 }
 
-yolo_qual::yolo_qual(std::string path_model) {
+yolo_qual::yolo_qual(const std::string& path_model) {
 	net = cv::dnn::readNet(path_model);
 }
 
-float yolo_qual::assess(cv::Mat image) {
+float yolo_qual::assess(const cv::Mat& image) {
 	cv::Mat image_rgb;
 	cv::cvtColor(image, image_rgb, cv::COLOR_BGR2RGB);
 	//image_rgb = image_scale(image_rgb, width, height);
@@ -183,7 +188,7 @@ float yolo_qual::assess(cv::Mat image) {
 	return quality;
 }
 
-cv::Mat yolo_qual::image_normalise(cv::Mat image) {
+cv::Mat yolo_qual::image_normalise(const cv::Mat& image) {
 	std::vector<cv::Mat> channels;
 	cv::split(image, channels);
 	for (int i = 0; i < 3; i++) {
@@ -199,18 +204,18 @@ cv::Mat yolo_qual::image_normalise(cv::Mat image) {
 	return normalised;
 }
 
-yolo::yolo(std::string path_model_detect) :
+yolo::yolo(const std::string& path_model_detect) :
 	use_qual(false),
 	face(path_model_detect, 0.60, 0.5)
 {}
 
-yolo::yolo(std::string path_model_detect, std::string path_model_assess) :
+yolo::yolo(const std::string& path_model_detect, const std::string& path_model_assess) :
 	use_qual(true),
 	face(path_model_detect, 0.60, 0.5),
 	qual(path_model_assess)
 {}
 
-std::vector<proposal> yolo::find(cv::Mat image) {
+std::vector<proposal> yolo::find(const cv::Mat& image) {
 	auto finds = face.detect(image);
 	if (!use_qual) {
 		return finds; 

@@ -1,3 +1,11 @@
+//Database-centric routines
+// Two main functions: InitDB, and AddFilesToDB
+
+// Initialise database tables
+// Adding media file information to the database, including thumbnails and metadata
+// Filling in word associations table
+// Removing database entries for files that are no longer on disk
+
 package av
 
 import (
@@ -5,14 +13,15 @@ import (
 	"errors"
 	_ "github.com/mattn/go-sqlite3"
 	"log"
+	"fmt"
 	"os"
 	"strings"
 	"path/filepath"
+
+	"github.com/jml-89/http-server-av/internal/util"
 )
 
 func InitDB(db *sql.DB) error {
-	log.Println("Initialising database")
-
 	tx, err := db.Begin()
 	if err != nil {
 		log.Println(err)
@@ -21,6 +30,14 @@ func InitDB(db *sql.DB) error {
 	defer tx.Rollback()
 
 	tables := []string{
+		`create table if not exists filestats (
+			filename text,
+			filesize integer,
+			probes integer,
+			facechecked integer,
+			primary key (filename)
+		);`,
+
 		`create table if not exists tags (
 			filename text,
 			name text,
@@ -28,16 +45,93 @@ func InitDB(db *sql.DB) error {
 			primary key (filename, name)
 		);`,
 
+		`create index if not exists tags_filename_idx on tags(filename);`,
+		`create index if not exists tags_name_idx on tags(name);`,
+
 		`create table if not exists thumbnails (
 			filename text,
 			image blob,
+			facechecked integer,
 			primary key (filename)
 		);`,
 
-		`create table if not exists checked (
+		`create table if not exists thumbmap (
 			filename text,
-			primary key (filename)
+			thumbname text,
+			primary key (filename, thumbname)
 		);`,
+
+		`create index if not exists thumbmap_filename_idx on thumbmap(filename);`,
+		`create index if not exists thumbmap_thumbname_idx on thumbmap(thumbname);`,
+
+		`create table if not exists thumbface (
+			thumbname text,
+			area integer,
+			confidence real,
+			quality real
+		);`,
+
+		`create index if not exists thumbface_thumbname_idx on thumbface(thumbname);`,
+
+		`drop view if exists bestthumb;`,
+		`drop view if exists thumbscore;`,
+
+		`create view if not exists thumbscore (
+			thumbname,
+			area,
+			confidence,
+			quality,
+			score
+		) as 
+			select 
+				a.thumbname,
+				sum(b.area),
+				avg(b.confidence),
+				avg(b.quality),
+				max(min(50000, b.area) * min(0.4, b.quality) * b.confidence) as score
+			from
+				thumbmap a
+			left join
+				thumbface b
+			on 
+				a.thumbname = b.thumbname
+			group by
+				a.thumbname;
+		`,
+
+		`create view if not exists bestthumb (
+			filename,
+			thumbname,
+			area,
+			confidence,
+			quality,
+			score
+		) as 
+			select 
+				a.filename, 
+				a.thumbname, 
+				b.area,
+				b.confidence,
+				b.quality,
+				max(b.score)
+			from
+				thumbmap a
+			left join
+				thumbscore b
+			on 
+				a.thumbname = b.thumbname
+			group 
+				by a.filename;
+		`,
+
+		`create table if not exists wordassocs (
+			filename text,
+			word text,
+			primary key (filename, word) on conflict ignore
+		);`,
+
+		`create index if not exists wordassocs_filename_idx on wordassocs(filename);`,
+		`create index if not exists wordassocs_word_idx on wordassocs(word);`,
 	}
 
 	for _, table := range tables {
@@ -48,27 +142,38 @@ func InitDB(db *sql.DB) error {
 		}
 	}
 
-	// Only really necessary when checked table was introduced
-	// Now everything gets added to checked correctly already
-	// So this is redundant -- but no harm in keeping it around
-	_, err = tx.Exec(
-		`insert or ignore into checked (filename) 
-			select filename 
-			from tags 
-			where name is 'diskfilename';
-		`)
-	if err != nil {
-		log.Println(err)
-		return err
-	}
-
 	err = tx.Commit()
 	if err != nil {
 		log.Println(err)
 		return err
 	}
 
-	log.Println("Database initialised")
+	return nil
+}
+
+func insertThumbnail(tx *sql.Tx, filename string, thumbnail Thumbnail) error {
+	thumbName := fmt.Sprintf("%s.webp", thumbnail.digest)
+	_, err := tx.Exec(`
+		insert or replace into 
+			thumbnails (filename, image, facechecked) 
+			values ( :filename, :image, 0);
+		`,
+		sql.Named("filename", thumbName), 
+		sql.Named("image", thumbnail.image))
+	if err != nil {
+		return err
+	}
+
+	_, err = tx.Exec(`
+		insert or replace into
+			thumbmap (filename, thumbname)
+			values ( :filename, :thumbname );
+		`, 
+		sql.Named("thumbname", thumbName), 
+		sql.Named("filename", filename))
+	if err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -78,24 +183,24 @@ func InitDB(db *sql.DB) error {
 // But how many rows at once? I do not know
 // This has performed pretty reasonably in any case
 // The limiting performance factor is elsewhere (handling media files)
-func insertMedia(db *sql.DB, thumbnail []byte, metadata map[string]string) error {
-	tx, err := db.Begin()
-	if err != nil {
-		log.Println(err)
-		return err
+func insertMedia(tx *sql.Tx, thumbnails []Thumbnail, metadata map[string]string, probes int) error {
+	for _, thumbnail := range thumbnails {
+		err := insertThumbnail(tx, metadata["diskfilename"], thumbnail)
+		if err != nil {
+			log.Println(err)
+			return err
+		}
 	}
-	defer tx.Rollback()
 
-	stmtThumb, err := tx.Prepare(`
-		insert or replace into 
-			thumbnails (filename, image) 
-			    values (       ?,     ?);
-		`)
+	_, err := tx.Exec(`update filestats 
+		set probes = :probes
+		where filename = :filename;`,
+		sql.Named("filename", metadata["diskfilename"]),
+		sql.Named("probes", probes))
 	if err != nil {
 		log.Println(err)
 		return err
 	}
-	defer stmtThumb.Close()
 
 	stmtMetadata, err := tx.Prepare(`
 		insert or replace into 
@@ -108,24 +213,12 @@ func insertMedia(db *sql.DB, thumbnail []byte, metadata map[string]string) error
 	}
 	defer stmtMetadata.Close()
 
-	_, err = stmtThumb.Exec(metadata["thumbname"], thumbnail)
-	if err != nil {
-		log.Println(err)
-		return err
-	}
-
 	for k, v := range metadata {
-		_, err = stmtMetadata.Exec(metadata["diskfilename"], k, v)
+		_, err = stmtMetadata.Exec(metadata["diskfilename"], strings.ToLower(k), v)
 		if err != nil {
 			log.Println(err)
 			return err
 		}
-	}
-
-	err = tx.Commit()
-	if err != nil {
-		log.Println(err)
-		return err
 	}
 
 	return nil
@@ -134,119 +227,135 @@ func insertMedia(db *sql.DB, thumbnail []byte, metadata map[string]string) error
 // Majority of this function is orchestrating the goroutines
 // There may be opportunity to expand some error handling
 // However have not seen enough errors in testing to work on
-func AddFilesToDB(db *sql.DB, path string) (int, error) {
+func AddFilesToDB(db *sql.DB, numWorkers int, probes int, path string) (int, error) {
 	count := 0
 
-	log.Printf("Adding files in %s to db\n", path)
-
-	filenames, err := recls(path)
+	allFiles, err := recls(path)
 	if err != nil {
 		return count, err
 	}
-	log.Printf("%v files found\n", len(filenames))
 
-	filenames, err = filesNotInDB(db, filenames)
+	filenames, err := filesNotInDB(db, allFiles)
 	if err != nil {
 		return count, err
 	}
-	log.Printf("%v files have not been checked previously\n", len(filenames))
 
 	if len(filenames) == 0 {
-		log.Printf("Nothing to do here")
-		return 0, nil
+		return count, nil
 	}
 
 	type Reply struct {
-		filename  string
 		stopped   bool
-		thumbnail []byte
-		metadata  map[string]string
 		err       error
+		payload MediaInfo
 	}
 
 	type Request struct {
 		stop     bool
 		filename string
-		respond  chan<- Reply
 	}
 
 	replies := make(chan Reply)
 	requests := make(chan Request)
 
-	worker := func(t *Thumbnailer) {
+	worker := func() {
 		for {
 			select {
 			case req := <-requests:
 				if req.stop {
-					req.respond <- Reply{
-						filename:  req.filename,
-						stopped:   true,
-						thumbnail: nil,
-						metadata:  nil,
-						err:       nil,
-					}
+					replies <- Reply{stopped: true}
 					return
 				}
 
-				tmb, mt, err := parseMediaFile(t, req.filename)
-				req.respond <- Reply{
-					filename:  req.filename,
+				mediainfo, err := ParseMediaFile(req.filename, probes)
+				replies <- Reply{
 					stopped:   false,
-					thumbnail: tmb,
-					metadata:  mt,
 					err:       err,
+					payload: mediainfo,
 				}
 			}
 		}
 	}
 
-	workerCount := 4
-	for i := 0; i < workerCount; i++ {
-		thumber, err := NewThumbnailer()
+	insertReply := func(tx *sql.Tx, reply Reply) error {
+		_, err := tx.Exec(`insert or replace into 
+			filestats (filename, filesize, probes, facechecked) 
+			values (:filename, :filesize, 0, 0);`, 
+			sql.Named("filename", reply.payload.filename),
+			sql.Named("filesize", reply.payload.fileinfo.Size()))
 		if err != nil {
-			log.Println(err)
-			return count, err
+			return err
 		}
-		go worker(thumber)
+
+		err = insertMedia(tx, reply.payload.thumbnails, reply.payload.metadata, probes)
+		if err != nil {
+			return err
+		}
+
+		return nil
 	}
 
-	log.Printf("Scanning files with %d goroutines\n", workerCount)
+	workerCount := numWorkers
+
+	replyHandler := func(reply Reply) error {
+		if reply.stopped {
+			workerCount--
+			return nil
+		}
+
+		if reply.err == errNotMediaFile {
+			return nil
+		}
+
+		if errors.Is(reply.err, os.ErrNotExist) {
+			return nil
+		}
+
+		if reply.err != nil {
+			return reply.err
+		}
+
+		tx, err := db.Begin()
+		if err != nil {
+			log.Println(err)
+			return err
+		}
+		defer tx.Rollback()
+
+		err = insertReply(tx, reply)
+		if err != nil {
+			log.Println(err)
+			return err
+		}
+
+		err = tx.Commit()
+		if err != nil {
+			log.Println(err)
+			return err
+		}
+
+		count++
+		return nil
+	}
+
+	for i := 0; i < workerCount; i++ {
+		go worker()
+	}
 
 	i := 0
 	req := Request{
 		stop:     false,
 		filename: filenames[i],
-		respond:  replies,
 	}
+
 
 	for workerCount > 0 {
 		select {
 		case reply := <-replies:
-			if reply.stopped {
-				workerCount--
-				continue
-			}
-
-			_, err := db.Exec("insert into checked (filename) values (?);", reply.filename)
+			err := replyHandler(reply)
 			if err != nil {
-				break
+				return count, err
 			}
-
-			if reply.err == errNotMediaFile {
-				continue
-			}
-
-			if reply.err != nil {
-				err = reply.err
-				break
-			}
-
-			err = insertMedia(db, reply.thumbnail, reply.metadata)
-			if err != nil {
-				break
-			}
-
-			count++
 
 		case requests <- req:
 			i++
@@ -259,32 +368,67 @@ func AddFilesToDB(db *sql.DB, path string) (int, error) {
 		}
 	}
 
-	log.Println("Files scanned, goroutines complete")
-
-
-	log.Println("Word associations...")
 	err = wordassocs(db)
 	if err != nil {
 		return count, err
 	}
 
-	log.Println("Fixing tags...")
 	err = fixtags(db)
 	if err != nil {
 		return count, err
 	}
 
-	log.Println("Cull missing...")
-	err = cullMissing(db, path)
+	err = cullMissing(db)
 	if err != nil {
 		return count, err
 	}
 
-
 	return count, err
 }
 
-func cullMissing(db *sql.DB, dir string) error {
+func findMissingFiles(db *sql.DB) ([]string, error) {
+	missing := make([]string, 0, 10)
+
+	rows, err := db.Query(`select filename from filestats;`)
+	if err != nil {
+		log.Println(err)
+		return missing, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var filename string
+		err = rows.Scan(&filename)
+		if err != nil {
+			log.Println(err)
+			return missing, err
+		}
+
+		_, err = os.Stat(filename)
+		if errors.Is(err, os.ErrNotExist) {
+			missing = append(missing, filename)
+			continue
+		}
+
+		if err != nil {
+			return missing, err
+		}
+	}
+
+	return missing, err
+}
+
+func cullMissing(db *sql.DB) error {
+	missingFiles, err := findMissingFiles(db)
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+
+	if len(missingFiles) == 0 {
+		return nil
+	}
+
 	tx, err := db.Begin()
 	if err != nil {
 		log.Println(err)
@@ -292,64 +436,24 @@ func cullMissing(db *sql.DB, dir string) error {
 	}
 	defer tx.Rollback()
 
-	stmtTagDel, err := tx.Prepare("delete from tags where filename is ?;")
-	if err != nil {
-		log.Println(err)
-		return err
+	delqueries := []string{
+		"delete from tags where filename is ?;",
+		"delete from wordassocs where filename is ?;",
+		"delete from filestats where filename is ?;",
+		"delete from thumbmap where filename is ?;",
 	}
-	defer stmtTagDel.Close()
-
-	stmtAssocDel, err := tx.Prepare("delete from wordassocs where filename is ?;")
-	if err != nil {
-		log.Println(err)
-		return err
-	}
-	defer stmtAssocDel.Close()
 
 	count := 0
-	rows, err := tx.Query(`
-		select filename, val 
-		from tags 
-		where name is 'diskfilename';`)
-	if err != nil {
-		log.Println(err)
-		return err
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var filename string
-		var path string
-		err = rows.Scan(&filename, &path)
-		if err != nil {
-			log.Println(err)
-			return err
-		}
-
-		_, err = os.Stat(path)
-		if errors.Is(err, os.ErrNotExist) {
-			// file moved, or removed
-			log.Printf("Removing %s\n", path)
-			_, err = stmtTagDel.Exec(filename)
+	for _, missingFile := range missingFiles {
+		for _, delquery := range delqueries {
+			_, err := tx.Exec(delquery, missingFile)
 			if err != nil {
 				log.Println(err)
 				return err
 			}
-
-			_, err = stmtAssocDel.Exec(filename)
-			if err != nil {
-				log.Println(err)
-				return err
-			}
-
-			count += 1
-			continue
 		}
 
-		if err != nil {
-			log.Println(err)
-			return err
-		}
+		count += 1
 	}
 
 	err = tx.Commit()
@@ -358,36 +462,37 @@ func cullMissing(db *sql.DB, dir string) error {
 		return err
 	}
 
-	log.Printf("%d missing media items removed\n", count)
 	return nil
 }
 
 // returns a slice of files which are not in the database
-func filesNotInDB(db *sql.DB, filenames []string) ([]string, error) {
+func filesNotInDB(db *sql.DB, filenames map[string]os.FileInfo) ([]string, error) {
 	newFiles := make([]string, 0, len(filenames))
 
-	rows, err := db.Query("select filename from checked;")
+	rows, err := db.Query("select filename, filesize from filestats;")
 	if err != nil {
 		log.Println(err)
 		return newFiles, err
 	}
 	defer rows.Close()
 
-	dbnames := make(map[string]bool)
+	dbfilesizes := make(map[string]int64)
 	for rows.Next() {
 		var filename string
-		err = rows.Scan(&filename)
+		var filesize int64
+		err = rows.Scan(&filename, &filesize)
 		if err != nil {
 			log.Println(err)
 			return newFiles, err
 		}
 
-		dbnames[filename] = true
+		dbfilesizes[filename] = filesize
 	}
 
-	for _, filename := range filenames {
-		if _, ok := dbnames[filename]; !ok {
-			newFiles = append(newFiles, filename)
+	for name, info := range filenames {
+		dbsize, ok := dbfilesizes[name]
+		if !ok || dbsize != info.Size() {
+			newFiles = append(newFiles, name)
 		}
 	}
 
@@ -398,6 +503,24 @@ func filesNotInDB(db *sql.DB, filenames []string) ([]string, error) {
 // album, ALBUM, Album -> album
 // artist, ARTIST, Artist -> artist
 func fixtags(db *sql.DB) error {
+	tags, err := util.AllRows1(db, "select distinct(name) from tags;", "")
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+
+	badTags := make([]string, 0, 0)
+	for _, tag := range tags {
+		lowered := strings.ToLower(tag)
+		if lowered != tag {
+			badTags = append(badTags, tag)
+		}
+	}
+
+	if len(badTags) == 0 {
+		return nil
+	}
+
 	tx, err := db.Begin()
 	if err != nil {
 		log.Println(err)
@@ -412,21 +535,7 @@ func fixtags(db *sql.DB) error {
 	}
 	defer upd.Close()
 
-	rows, err := tx.Query("select distinct(name) from tags;")
-	if err != nil {
-		log.Println(err)
-		return err
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var name string
-		err = rows.Scan(&name)
-		if err != nil {
-			log.Println(err)
-			return err
-		}
-
+	for _, name := range badTags {
 		lower := strings.ToLower(name)
 		if lower == name {
 			continue
@@ -476,17 +585,6 @@ func stringsplat(s, cutset string) []string {
 // word associations used for related videos and search refinement features
 // just takes tag contents, cleans them up, adds them to a key val table
 func wordassocs(db *sql.DB) error {
-	_, err := db.Exec(`
-		create table if not exists wordassocs (
-			filename text,
-			word text,
-			primary key (filename, word) on conflict ignore
-		);`)
-	if err != nil {
-		log.Println(err)
-		return err
-	}
-
 	tx, err := db.Begin()
 	if err != nil {
 		log.Println(err)
@@ -494,7 +592,7 @@ func wordassocs(db *sql.DB) error {
 	}
 	defer tx.Rollback()
 
-	rows, err := db.Query(`
+	rows, err := tx.Query(`
 		select filename, val 
 		from tags 
 		where filename not in (
@@ -547,8 +645,8 @@ func wordassocs(db *sql.DB) error {
 	return err
 }
 
-func recls(dir string) ([]string, error) {
-	files := make([]string, 0, 128)
+func recls(dir string) (map[string]os.FileInfo, error) {
+	files := make(map[string]os.FileInfo)
 
 	var ls func(string) error
 	ls = func(dir string) error {
@@ -566,7 +664,11 @@ func recls(dir string) ([]string, error) {
 				}
 				continue
 			}
-			files = append(files, path)
+
+			files[path], err = entry.Info()
+			if err != nil {
+				return err
+			}
 		}
 
 		return nil

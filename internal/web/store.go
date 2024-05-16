@@ -6,6 +6,8 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	"log"
 	"strings"
+
+	"github.com/jml-89/http-server-av/internal/util"
 )
 
 func getTemplate(db *sql.DB, name string) (string, error) {
@@ -55,25 +57,19 @@ func getRouteVals(db *sql.DB, key string) (map[string]string, error) {
 }
 
 func runTemplateQueries(db *sql.DB, key string, inserts map[string]string, args []any) (map[string][][]string, error) {
-	rows, err := db.Query(`
+	names, queries, err := util.AllRows2(db, `
 		select name, content
 		from templatequeries
-		where path is :key;
-		`, sql.Named("key", key))
+		where path is :key;`, "", "", sql.Named("key", key))
 	if err != nil {
 		log.Println(err)
 		return nil, err
 	}
-	defer rows.Close()
 
 	queryResults := make(map[string][][]string)
-	for rows.Next() {
-		var name, query string
-		err = rows.Scan(&name, &query)
-		if err != nil {
-			log.Println(err)
-			return nil, err
-		}
+	for i := 0; i < len(names); i++ {
+		name := names[i]
+		query := queries[i]
 
 		for before, after := range inserts {
 			query = strings.Replace(

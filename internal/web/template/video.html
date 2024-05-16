@@ -40,6 +40,19 @@
 	{{if .description}}<pre>{{.description}}</pre>{{end}}
 </div>
 
+<h1>Thumbnails</h1>
+<div class="thumbs">
+{{range $idx, $elem := .thumbs}}
+	<a class="media-item">
+		<img class="thumb-img" src="/tmb/{{index $elem 0 | escapepath}}"/>
+		<div class="media-title">Area: {{index $elem 1}}</div>
+		<div class="media-title">Confidence: {{index $elem 2}}</div>
+		<div class="media-title">Quality: {{index $elem 3}}</div>
+		<div class="media-title">Score: {{index $elem 4}}</div>
+	</a>
+{{end}}
+</div>
+
 <h1>Related Videos</h1>
 <div class="thumbs">
 {{range $idx, $elem := .related}}

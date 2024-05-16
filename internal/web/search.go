@@ -94,6 +94,7 @@ func lookup2(db *sql.DB, params SearchParameters) ([]string, error) {
 	if err != nil {
 		return res, err
 	}
+	defer rows.Close()
 
 	for rows.Next() {
 		var filename string

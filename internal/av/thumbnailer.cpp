@@ -13,20 +13,59 @@
 
 #include "util.hpp"
 
+void cv_set_num_threads(int n) {
+	cv::setNumThreads(n);
+}
+
 thumbnailer *thumbnailer_init(char *path_model_detect, char *path_model_assess) {
-	auto one = std::string(path_model_detect);
-	auto two = std::string(path_model_assess);
-	return new thumbnailer(one, two);
+	return new thumbnailer(
+		std::string(path_model_detect), 
+		std::string(path_model_assess)
+	);
 }
 
 void thumbnailer_free(thumbnailer *t) {
 	delete t;
 }
 
-void thumbnailer_run(thumbnailer *t, char *path_in, char *path_out) {
-	auto one = std::string(path_in);
-	auto two = std::string(path_out);
-	t->run(one, two);
+void thumbnailer_run(thumbnailer *t, char *path_in, char *path_out, int probes) {
+	t->run(
+		std::string(path_in), 
+		std::string(path_out), 
+		probes
+	);
+}
+
+face_ret thumbnailer_run_image_buf(thumbnailer *t, unsigned char *buf, size_t buf_len) {
+	auto finds = t->run_image_buf(cv::Mat1b(1, static_cast<int>(buf_len), buf));
+
+	auto results = face_ret {};
+	results.len = 0;
+
+	for (auto& find : finds) {
+		results.faces[results.len++] = find;
+		if (results.len >= 16) {
+			break;
+		}
+	}
+
+	return results;
+}
+
+face_ret thumbnailer_run_image(thumbnailer *t, char *path) {
+	auto finds = t->run_image(std::string(path));
+
+	auto results = face_ret {};
+	results.len = 0;
+
+	for (auto& find : finds) {
+		results.faces[results.len++] = find;
+		if (results.len >= 16) {
+			break;
+		}
+	}
+
+	return results;
 }
 
 struct candidate {
@@ -41,13 +80,12 @@ thumbnailer::thumbnailer(const std::string& path_detect, const std::string& path
 	face_finder(yolo(path_detect, path_assess))
 {}
 
-void thumbnailer::run(const std::string& path_video, const std::string& path_out) {
+void thumbnailer::run(const std::string& path_video, const std::string& path_out, int probes) {
 	auto cap = cv::VideoCapture(path_video, cv::CAP_FFMPEG);
 
 	std::vector<candidate> candidates;
 
 	auto frame_count = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_COUNT));
-	auto probes = 8;
 	auto stride = frame_count / probes;
 	auto offset = stride / 2;
 	for (int i = 0; i < probes; i++) {
@@ -92,8 +130,10 @@ void thumbnailer::run(const std::string& path_video, const std::string& path_out
 		return;
 	}
 
+	// Any quality above about 0.3f is just about guaranteed to be a full face
+	// Confidence seems to like bigger faces
 	std::ranges::sort(candidates, {}, [](const auto& c) { 
-		return c.confidence * std::min(c.quality, 0.7f);
+		return c.confidence * std::min(c.quality, 0.4f);
 	});
 	std::ranges::reverse(candidates);
 
@@ -103,5 +143,31 @@ void thumbnailer::run(const std::string& path_video, const std::string& path_out
 		if (count > 1) { break; }
 		cv::imwrite(path_out, image_scale(candidate.image, 960, 540));
 	}
+}
+
+std::vector<face> thumbnailer::run_image_buf(const cv::Mat1b& buf) {
+	auto image = cv::imdecode(buf, cv::IMREAD_COLOR);
+
+	auto finds = face_finder.find(image);
+
+	auto results = std::vector<face>();
+	for (auto &find : finds) {
+		auto area = find.box_scaled.width * find.box_scaled.height;
+		results.push_back(face{area, find.confidence, find.quality});
+	}
+	return results;
+}
+
+std::vector<face> thumbnailer::run_image(const std::string& path_image) {
+	auto image = cv::imread(path_image);
+
+	auto finds = face_finder.find(image);
+
+	auto results = std::vector<face>();
+	for (auto &find : finds) {
+		auto area = find.box_scaled.width * find.box_scaled.height;
+		results.push_back(face{area, find.confidence, find.quality});
+	}
+	return results;
 }
 

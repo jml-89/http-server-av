@@ -2,6 +2,12 @@
 // Instead of the usual approach of writing a simple wrapper
 // Write functions that program needs that call C API directly
 // The verdict: Not much better, really -- just use a wrapper
+// Go does have one resource management advantage over C, the defer keyword
+// Nice to have resource free obviously called right after the allocation
+// That said the constant type conversions and copies, not clean code
+// I think the best would be
+// Go <-> C header <-> C++ implementation
+// Simply because resource management in C++ is superior to C
 
 package av
 
@@ -29,49 +35,65 @@ import (
 )
 
 var errNotMediaFile = errors.New("File is not an image or video")
-func parseMediaFile(t *Thumbnailer, filename string) ([]byte, map[string]string, error) {
-	info, err := os.Stat(filename)
+var errSeekFailed = errors.New("Seek failed")
+
+type Thumbnail struct {
+	digest string
+	source string
+	image []byte
+}
+
+type MediaInfo struct {
+	filename string
+	fileinfo os.FileInfo
+	thumbnails []Thumbnail
+	metadata map[string]string
+}
+
+func ParseMediaFile(filename string, probes int) (m MediaInfo, err error) {
+	m.filename = filename
+
+	m.fileinfo, err = os.Stat(filename)
 	if err != nil {
-		log.Println(err)
-		return nil, nil, err
+		if !errors.Is(err, os.ErrNotExist) {
+			log.Println(err)
+		}
+		return
 	}
 
-	metadata, err := GetMetadata(filename)
+	m.metadata, err = GetMetadata(filename)
 	if err != nil {
 		if fmt.Sprintf("%s", err) == "Invalid data found when processing input" {
-			log.Printf("%s is not a media file", filename)
 			// Just isn't a media file
-			return nil, nil, errNotMediaFile
+			err = errNotMediaFile
+			return 
 		}
+
 		log.Printf("%s: %s", filename, err)
-		return nil, nil, err
+		return
 	}
 
-	thumbnail, err := CreateThumbnail(t, filename)
+	if m.metadata["mediatype"] == "none" {
+		err = errNotMediaFile
+		return 
+	}
+
+	m.thumbnails, err = CreateThumbnails(filename, probes)
 	if err != nil {
 		log.Printf("Failed to generate thumbnail for %s", filename)
 		// We don't bail out here because it's not the end of the world
-	} else { 
-		digest, err := Checksum(thumbnail)
-		if err != nil {
-			log.Printf("Failed to generate checksum for %s", filename)
-		} else {
-			metadata["digest"] = digest
-			metadata["thumbname"] = fmt.Sprintf("%s.webp", digest)
-		}
+		// No thumbnail is no problem!
+		err = nil
 	}
 
-	metadata["favourite"] = "false"
-	metadata["newthumbnail"] = "true"
-	metadata["diskfiletime"] = info.ModTime().UTC().Format("2006-01-02T15:04:05")
-	metadata["diskfilename"] = filename
-	metadata["diskfilesize"] = fmt.Sprintf("%099d", info.Size())
+	// We include these for the sake of the tags table
+	m.metadata["favourite"] = "false"
+	m.metadata["multithumbnail"] = "true"
+	m.metadata["diskfiletime"] = m.fileinfo.ModTime().UTC().Format("2006-01-02T15:04:05")
+	m.metadata["diskfilename"] = filename
+	m.metadata["diskfilesize"] = fmt.Sprintf("%099d", m.fileinfo.Size())
 
-	if _, ok := metadata["thumbname"]; !ok {
-		metadata["thumbname"] = fmt.Sprintf("%s.webp", filename)
-	}
-
-	return thumbnail, metadata, nil
+	return
 }
 
 // Some files could be the same video with different metadata
@@ -195,11 +217,14 @@ func GetMetadata(path string) (map[string]string, error) {
 		res[C.GoString(tag.key)] = C.GoString(tag.value)
 	}
 
+	res["mediatype"] = "none"
 	for i := C.uint(0); i < avctx.nb_streams; i++ {
 		s := C.get_nth_stream(avctx, i)
 		if s.codecpar.codec_type == C.AVMEDIA_TYPE_VIDEO {
-			res["mediatype"] = "video"
-			break
+			if s.codecpar.codec_id != C.AV_CODEC_ID_ANSI {
+				res["mediatype"] = "video"
+				break
+			}
 		}
 
 		if s.codecpar.codec_type == C.AVMEDIA_TYPE_AUDIO {
@@ -429,53 +454,80 @@ func OpenBestStream(ctxFmt *C.AVFormatContext, avtype int32) (C.uint, *C.AVCodec
 	return idxStream, ctxDec, nil
 }
 
-var errSeekFailed = errors.New("Seek failed")
+// Creates a number of evenly spaced out thumbnails from a video
+func CreateThumbnails(pathIn string, num int) ([]Thumbnail, error) {
+	res := make([]Thumbnail, 0, num)
 
-func CreateThumbnail(t *Thumbnailer, pathIn string) ([]byte, error) {
+	step := 1.0 / float64(num)
+	pos := step / 2.0
+	for i := 0; i < num; i++ {
+		thumb, seek, err := CreateThumbnail(pathIn, pos)
+		if err != nil {
+			log.Println(err)
+			return nil, err
+		}
+
+		res = append(res, thumb)
+
+		if !seek {
+			break
+		}
+
+		pos += step
+	}
+
+	return res, nil
+}
+
+// Wrapper to handle various media situations
+// Consider unseekable files, files with no video (audio files we'll call them), etc.
+func CreateThumbnail(pathIn string, pos float64) (t Thumbnail, seek bool, err error) {
 	tmpFile, err := os.CreateTemp(os.TempDir(), "http-server-av.*.webp")
 	if err != nil {
 		log.Printf("%s", err)
-		return nil, err
+		return
 	}
 	defer os.Remove(tmpFile.Name())
 
-	t.Run(pathIn, tmpFile.Name())
-	info, err := os.Stat(tmpFile.Name())
-	if err != nil {
-		log.Println(err)
-		return nil, err
+	seek = true
+	err = CreateThumbnailX(pathIn, tmpFile.Name(), seek, pos)
+	// Some streams don't support seeking
+	// In this case just do a thumbnail of the first frame
+	// Better than nothing
+	if errors.Is(err, errSeekFailed) || fmt.Sprintf("%s", err) == "End of file" {
+		seek = false
+		err = CreateThumbnailX(pathIn, tmpFile.Name(), seek, pos)
+		if err != nil {
+			log.Printf("%s: %s", pathIn, err)
+		}
 	}
 
-	if info.Size() < 10 {
-		err = CreateThumbnailX(pathIn, tmpFile.Name(), true)
-
-		// Some streams don't support seeking
-		// In this case just do a thumbnail of the first frame
-		// Better than nothing
-		if errors.Is(err, errSeekFailed) || fmt.Sprintf("%s", err) == "End of file" {
-			err = CreateThumbnailX(pathIn, tmpFile.Name(), false)
-			if err != nil {
-				log.Printf("%s: %s", pathIn, err)
-			}
-		}
-
-		// When all else fails, go generic
+	// When all else fails, go generic
+	if err != nil {
+		err = CreateGenericThumbnail(tmpFile.Name())
 		if err != nil {
-			err = CreateGenericThumbnail(tmpFile.Name())
-			if err != nil {
-				log.Printf("%s: %s", pathIn, err)
-				return nil, err
-			}
+			log.Printf("%s: %s", pathIn, err)
+			return
 		}
 	}
 
 	b, err := io.ReadAll(tmpFile)
 	if err != nil {
 		log.Printf("%s", err)
-		return nil, err
+		return 
 	}
 
-	return b, err
+	digest, err := Checksum(b)
+	if err != nil {
+		log.Printf("%s", err)
+		return
+	}
+	
+	return Thumbnail{
+		source: pathIn,
+		digest: digest,
+		image: b,
+	}, seek, err
 }
 
 // Just creates a 960x540 test image
@@ -549,7 +601,17 @@ func CreateGenericThumbnail(pathOut string) error {
 	return nil
 }
 
-func CreateThumbnailX(pathIn, pathOut string, seek bool) error {
+// Creates a 960x540 WEBP thumbnail 
+// pathIn: video filepath
+// pathOut: thumbnail filepath
+// seek: try to seek? 
+// pos: if seeking, go to this position; pos range is 0.0 to 1.0, describing a percentage position in the video
+// 
+// If seek is true and the seek fails, this function will error out
+// 
+// Each time this function is called, a WEBP encoder is created
+// One could consider hoisting that call out and passing it as a parameter
+func CreateThumbnailX(pathIn, pathOut string, seek bool, pos float64) error {
 	var ctxFmtIn *C.AVFormatContext = nil
 	pathInArg := C.CString(pathIn)
 	defer C.free(unsafe.Pointer(pathInArg))
@@ -596,7 +658,7 @@ func CreateThumbnailX(pathIn, pathOut string, seek bool) error {
 	if seek {
 		durationSeconds := ctxFmtIn.duration / C.AV_TIME_BASE
 		var midPos C.AVRational
-		midPos.num = C.int(durationSeconds / 2)
+		midPos.num = C.int(float64(durationSeconds) * pos)
 		midPos.den = 1
 
 		rts := C.av_mul_q(midPos, C.av_inv_q(C.get_nth_stream(ctxFmtIn, idxStream).time_base))

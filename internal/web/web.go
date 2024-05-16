@@ -1,3 +1,5 @@
+//HTTP request handling
+// Most of this is tying up the route and html template information
 package web
 
 import (
@@ -55,8 +57,6 @@ func AddRoutes(db *sql.DB) error {
 		}
 
 		handler := createSuperSoftServe(db, path)
-
-		log.Printf("Adding handler for '%s' route\n", path)
 		http.HandleFunc(path, handler)
 	}
 

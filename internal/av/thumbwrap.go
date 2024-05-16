@@ -1,3 +1,5 @@
+//Wrapper for thumbnailer.cpp
+
 package av
 
 /*
@@ -7,6 +9,8 @@ package av
 
 #include "stdlib.h"
 #include "thumbnailer.h"
+
+size_t face_size(void) { return sizeof(face); }
 */
 import "C"
 
@@ -26,7 +30,15 @@ type Thumbnailer struct {
 	tmb *C.thumbnailer
 }
 
-func NewThumbnailer() (*Thumbnailer, error) {
+type Face struct {
+	Area int64
+	Confidence float32
+	Quality float32
+}
+
+func NewThumbnailer(numThreads int) (*Thumbnailer, error) {
+	C.cv_set_num_threads(C.int(numThreads))
+
 	fileDetect, err := os.CreateTemp(os.TempDir(), "http-server-av.yolov8n-face.*.onnx")
 	if err != nil {
 		log.Println(err)
@@ -67,14 +79,54 @@ func (t *Thumbnailer) Close() {
 	C.thumbnailer_free(t.tmb)
 }
 
-func (t *Thumbnailer) Run(path_video string, path_thumbnail string) error {
+func (t *Thumbnailer) RunImageBuf(image []byte) ([]Face, error) {
+	buf := C.CBytes(image)
+	defer C.free(buf)
+
+	//start := time.Now()
+	finds := C.thumbnailer_run_image_buf(t.tmb, (*C.uchar)(buf), (C.size_t)(len(image)))
+	//end := time.Now()
+	//log.Printf("\t%s\n", end.Sub(start))
+
+	faces := make([]Face, int(finds.len))
+	for i := 0; i < int(finds.len); i++ {
+		faces[i] = Face { 
+			Area: int64(finds.faces[i].area),
+			Confidence: float32(finds.faces[i].confidence), 
+			Quality: float32(finds.faces[i].quality),
+		}
+	}
+
+	return faces, nil
+}
+
+
+func (t *Thumbnailer) RunImage(path_image string) ([]Face, error) {
+	pin := C.CString(path_image)
+	defer C.free(unsafe.Pointer(pin))
+
+	finds := C.thumbnailer_run_image(t.tmb, pin)
+
+	faces := make([]Face, int(finds.len))
+	for i := 0; i < int(finds.len); i++ {
+		faces[i] = Face { 
+			Area: int64(finds.faces[i].area),
+			Confidence: float32(finds.faces[i].confidence), 
+			Quality: float32(finds.faces[i].quality),
+		}
+	}
+
+	return faces, nil
+}
+
+func (t *Thumbnailer) Run(path_video string, path_thumbnail string, probes int) error {
 	pin := C.CString(path_video)
 	defer C.free(unsafe.Pointer(pin))
 
 	pot := C.CString(path_thumbnail)
 	defer C.free(unsafe.Pointer(pot))
 
-	C.thumbnailer_run(t.tmb, pin, pot)
+	C.thumbnailer_run(t.tmb, pin, pot, C.int(probes))
 
 	return nil
 }

@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"github.com/mattn/go-sqlite3"
 	"log"
+	"math/rand"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
 	"os/signal"
+	"time"
 
 	"math"
 
@@ -20,6 +22,7 @@ import (
 var flagPort = flag.Int("port", 8080, "webserver port")
 var flagPath = flag.String("path", ".", "directory to serve")
 var flagPathDB = flag.String("db", ".info.db", "media info database path")
+var flagConc = flag.Int("conc", 2, "number of concurrent file scanner / thumbnailers to run")
 
 func mySqrt(x int) int {
 	return int(math.Sqrt(float64(x)))
@@ -66,11 +69,14 @@ func main() {
 	}
 	defer db.Close()
 
+	db.SetMaxOpenConns(1)
+
 	// WAL creates a few secondary files but generally I like it more
-	// find it plays nicer in general with most systems
+	// Allows more concurrent operations which is kind of critical in a Go runtime environment
+	//
 	// There's also WAL2 which addresses the ever-expanding write log problem
-	// But I don't think WAL2 is a standard feature yet
-	_, err = db.Exec("pragma journal_mode = wal;")
+	// But it *still* isn't on the main branch
+	_, err = db.Exec("pragma journal_mode = delete;")
 	if err != nil {
 		log.Fatalf("Failed to set journal_mode to wal (??): %s", err)
 	}
@@ -94,17 +100,48 @@ func main() {
 		log.Fatal(err)
 	}
 
-	log.Printf("Adding media files to database...\n")
-	count, err := av.AddFilesToDB(db, pathMedia)
-	if err != nil {
-		log.Fatal(err)
-	}
-	log.Printf("%v files added to database\n", count)
-
 	terminate := make(chan os.Signal)
 	signal.Notify(terminate, os.Interrupt)
 
 	log.Printf("Initialisation complete, webserver running on port %d", *flagPort)
+
+	go func() {
+		for {
+			_, err = av.AddFilesToDB(db, *flagConc, 2, pathMedia)
+			if err != nil {
+				log.Println(err)
+				return
+			}
+
+			time.Sleep(time.Duration(rand.Intn(10)) * time.Second)
+		}
+	}()
+
+	go func() {
+		ev, err := av.NewEvaluator(*flagConc)
+		if err != nil {
+			log.Println(err)
+			return
+		}
+
+		for {
+			_, err = ev.Run(db)
+			if err != nil {
+				log.Println(err)
+				return
+			}
+
+			numImproved, err := av.Improver(db)
+			if err != nil {
+				log.Println(err)
+				return
+			}
+
+			if numImproved == 0 {
+				time.Sleep(time.Duration(rand.Intn(60)) * time.Second)
+			}
+		}
+	}()
 
 	select {
 	case _ = <-done:

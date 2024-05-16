@@ -93,6 +93,22 @@ var routeDefaultValues = map[string]map[string]string{
 // :variable are sourced from request parameters
 var routeDefaultQueries = map[string]map[string]string{
 	"/watch": {
+		"thumbs": `
+			select 
+				thumbname, 
+				ifnull(area, -1), 
+				ifnull(confidence, -1), 
+				ifnull(quality, -1), 
+				ifnull(score, -1)
+			from thumbscore
+			where thumbname in (
+				select thumbname
+				from thumbmap
+				where filename = :filename
+			)
+			order by score desc;
+		`,
+
 		"related": `
 			with wordcount(filename, num) as (
 				select 
@@ -132,7 +148,7 @@ var routeDefaultQueries = map[string]map[string]string{
 			), stage2(filename, thumb, score) as (
 				select 
 					a.filename,
-					(select val from tags where name is 'thumbname' and filename is a.filename),
+					(select thumbname from bestthumb where filename = a.filename),
 					(a.commoncount * 200) / (a.leftcount + a.rightcount)
 				from 
 					scored a
@@ -178,10 +194,11 @@ var routeDefaultQueries = map[string]map[string]string{
 
 	"/": {
 		"videos": `
-			select filename, val 
-			from tags 
-			where name is 'thumbname' 
-			order by rowid desc 
+			select a.filename, a.thumbname
+			from bestthumb a
+			inner join thumbnails b
+			on a.thumbname = b.filename
+			order by b.rowid desc 
 			limit 50;
 		`,
 	},
@@ -193,11 +210,10 @@ var routeDefaultQueries = map[string]map[string]string{
 				from ({{searchresults}})
 				where name is :sortcriteria
 			)
-			select b.filename, b.val 
+			select b.filename, b.thumbname
 			from unsorted a
-			join tags b
+			join bestthumb b
 			on a.filename = b.filename
-			and b.name is 'thumbname'
 			order by 
 				case when :sortorder is 'desc' then a.criteria end desc, 
 				case when :sortorder is 'asc' then a.criteria end asc, 

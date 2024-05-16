@@ -1,5 +1,6 @@
 Web-serve a directory of video and/or audio and/or image files   
 It's like http-server, but tuned for media files   
+Compiles to a single binary, nothing else needed to deploy
 
 # Usage
 Install it on your PATH  
@@ -22,9 +23,10 @@ I believe some code paths leak memory -- barely any, seems to be in the webp cod
 Linux  
 Could work on Windows too, just don't have a Windows machine to test on
 
-# Requirements
+# Requirements 
 Go  
 ffmpeg development libraries (usually ffmpeg-dev in package manager)  
+opencv development libraries (usually libopencv-dev in package manager)
 
 # Installation
 Clone this repo, then run the following from inside it   
