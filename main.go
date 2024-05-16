@@ -69,14 +69,14 @@ func main() {
 	}
 	defer db.Close()
 
-	db.SetMaxOpenConns(1)
+	//db.SetMaxOpenConns(1)
 
 	// WAL creates a few secondary files but generally I like it more
 	// Allows more concurrent operations which is kind of critical in a Go runtime environment
 	//
 	// There's also WAL2 which addresses the ever-expanding write log problem
 	// But it *still* isn't on the main branch
-	_, err = db.Exec("pragma journal_mode = delete;")
+	_, err = db.Exec("pragma journal_mode = wal;")
 	if err != nil {
 		log.Fatalf("Failed to set journal_mode to wal (??): %s", err)
 	}
