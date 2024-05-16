@@ -585,25 +585,27 @@ func stringsplat(s, cutset string) []string {
 // word associations used for related videos and search refinement features
 // just takes tag contents, cleans them up, adds them to a key val table
 func wordassocs(db *sql.DB) error {
+	filenames, contents, err := util.AllRows2(db, `
+		select filename, val 
+		from tags 
+		where filename not in (
+			select distinct(filename) 
+			from wordassocs);`, "", "")
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+
+	if len(filenames) == 0 {
+		return nil
+	}
+
 	tx, err := db.Begin()
 	if err != nil {
 		log.Println(err)
 		return err
 	}
 	defer tx.Rollback()
-
-	rows, err := tx.Query(`
-		select filename, val 
-		from tags 
-		where filename not in (
-			select distinct(filename) 
-			from wordassocs
-		);`)
-	if err != nil {
-		log.Println(err)
-		return err
-	}
-	defer rows.Close()
 
 	stmtUpdate, err := tx.Prepare(`
 		insert into 
@@ -616,14 +618,9 @@ func wordassocs(db *sql.DB) error {
 	}
 	defer stmtUpdate.Close()
 
-	for rows.Next() {
-		var filename string
-		var words string
-		err = rows.Scan(&filename, &words)
-		if err != nil {
-			log.Println(err)
-			return err
-		}
+	for i := 0; i < len(filenames); i++ {
+		filename := filenames[i]
+		words := contents[i]
 
 		for _, word := range stringsplat(words, punctuation) {
 			word = strings.ToLower(word)
