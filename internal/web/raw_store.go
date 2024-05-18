@@ -71,10 +71,10 @@ var routeDefaults = map[string]map[string]string{
 		"method":   "post",
 		"redirect": "/templates/",
 	},
-	
+
 	"/duplicates/": {
-		"alias": "Duplicates",
-		"method": "get",
+		"alias":    "Duplicates",
+		"method":   "get",
 		"template": "duplicates",
 	},
 }
@@ -96,11 +96,11 @@ var routeDefaultQueries = map[string]map[string]string{
 		"thumbs": `
 			select 
 				thumbname, 
-				ifnull(area, -1), 
-				ifnull(confidence, -1), 
-				ifnull(quality, -1), 
-				ifnull(score, -1)
-			from thumbscore
+				area,
+				confidence,
+				quality,
+				score
+			from thumbnail
 			where thumbname in (
 				select thumbname
 				from thumbmap
@@ -148,7 +148,7 @@ var routeDefaultQueries = map[string]map[string]string{
 			), stage2(filename, thumb, score) as (
 				select 
 					a.filename,
-					(select thumbname from bestthumb where filename = a.filename),
+					(select bestthumb from mediastat where filename = a.filename),
 					(a.commoncount * 200) / (a.leftcount + a.rightcount)
 				from 
 					scored a
@@ -194,11 +194,10 @@ var routeDefaultQueries = map[string]map[string]string{
 
 	"/": {
 		"videos": `
-			select a.filename, a.thumbname
-			from bestthumb a
-			inner join thumbnails b
-			on a.thumbname = b.filename
-			order by b.rowid desc 
+			select filename, bestthumb
+			from mediastat
+			where bestthumb is not null
+			order by rowid desc 
 			limit 50;
 		`,
 	},
@@ -210,9 +209,9 @@ var routeDefaultQueries = map[string]map[string]string{
 				from ({{searchresults}})
 				where name is :sortcriteria
 			)
-			select b.filename, b.thumbname
+			select b.filename, b.bestthumb
 			from unsorted a
-			join bestthumb b
+			join mediastat b
 			on a.filename = b.filename
 			order by 
 				case when :sortorder is 'desc' then a.criteria end desc, 

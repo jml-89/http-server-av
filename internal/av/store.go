@@ -11,12 +11,12 @@ package av
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	_ "github.com/mattn/go-sqlite3"
 	"log"
-	"fmt"
 	"os"
-	"strings"
 	"path/filepath"
+	"strings"
 
 	"github.com/jml-89/http-server-av/internal/util"
 )
@@ -30,30 +30,31 @@ func InitDB(db *sql.DB) error {
 	defer tx.Rollback()
 
 	tables := []string{
-		`create table if not exists filestats (
+		`create table if not exists filestat (
 			filename text,
-			filesize integer,
-			probes integer,
-			facechecked integer,
+			filesize integer not null,
+			primary key (filename)
+		);`,
+
+		`create table if not exists mediastat (
+			filename text,
+			canseek integer not null,
+			probes integer not null,
+			facechecked integer not null,
+			bestthumb text not null,
+			bestscore real not null,
 			primary key (filename)
 		);`,
 
 		`create table if not exists tags (
 			filename text,
 			name text,
-			val text,
+			val text not null,
 			primary key (filename, name)
 		);`,
 
 		`create index if not exists tags_filename_idx on tags(filename);`,
 		`create index if not exists tags_name_idx on tags(name);`,
-
-		`create table if not exists thumbnails (
-			filename text,
-			image blob,
-			facechecked integer,
-			primary key (filename)
-		);`,
 
 		`create table if not exists thumbmap (
 			filename text,
@@ -65,64 +66,13 @@ func InitDB(db *sql.DB) error {
 		`create index if not exists thumbmap_thumbname_idx on thumbmap(thumbname);`,
 
 		`create table if not exists thumbface (
-			thumbname text,
-			area integer,
-			confidence real,
-			quality real
+			thumbname text not null,
+			area integer not null,
+			confidence real not null,
+			quality real not null
 		);`,
 
 		`create index if not exists thumbface_thumbname_idx on thumbface(thumbname);`,
-
-		`drop view if exists bestthumb;`,
-		`drop view if exists thumbscore;`,
-
-		`create view if not exists thumbscore (
-			thumbname,
-			area,
-			confidence,
-			quality,
-			score
-		) as 
-			select 
-				a.thumbname,
-				sum(b.area),
-				avg(b.confidence),
-				avg(b.quality),
-				max(min(50000, b.area) * min(0.4, b.quality) * b.confidence) as score
-			from
-				thumbmap a
-			left join
-				thumbface b
-			on 
-				a.thumbname = b.thumbname
-			group by
-				a.thumbname;
-		`,
-
-		`create view if not exists bestthumb (
-			filename,
-			thumbname,
-			area,
-			confidence,
-			quality,
-			score
-		) as 
-			select 
-				a.filename, 
-				a.thumbname, 
-				b.area,
-				b.confidence,
-				b.quality,
-				max(b.score)
-			from
-				thumbmap a
-			left join
-				thumbscore b
-			on 
-				a.thumbname = b.thumbname
-			group 
-				by a.filename;
-		`,
 
 		`create table if not exists wordassocs (
 			filename text,
@@ -132,6 +82,17 @@ func InitDB(db *sql.DB) error {
 
 		`create index if not exists wordassocs_filename_idx on wordassocs(filename);`,
 		`create index if not exists wordassocs_word_idx on wordassocs(word);`,
+
+		`create table if not exists thumbnail (
+			thumbname string,
+			image blob not null,
+			facechecked integer not null,
+			area integer not null,
+			confidence real not null,
+			quality real not null,
+			score real not null,
+			primary key (thumbname)
+		);`,
 	}
 
 	for _, table := range tables {
@@ -148,6 +109,12 @@ func InitDB(db *sql.DB) error {
 		return err
 	}
 
+	err = RescoreAll(db)
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+
 	return nil
 }
 
@@ -155,10 +122,10 @@ func insertThumbnail(tx *sql.Tx, filename string, thumbnail Thumbnail) error {
 	thumbName := fmt.Sprintf("%s.webp", thumbnail.digest)
 	_, err := tx.Exec(`
 		insert or replace into 
-			thumbnails (filename, image, facechecked) 
-			values ( :filename, :image, 0);
+			thumbnail (thumbname, image, facechecked, area, confidence, quality, score) 
+			values (:filename, :image, 0, -1, -1, -1, -1);
 		`,
-		sql.Named("filename", thumbName), 
+		sql.Named("filename", thumbName),
 		sql.Named("image", thumbnail.image))
 	if err != nil {
 		return err
@@ -168,8 +135,8 @@ func insertThumbnail(tx *sql.Tx, filename string, thumbnail Thumbnail) error {
 		insert or replace into
 			thumbmap (filename, thumbname)
 			values ( :filename, :thumbname );
-		`, 
-		sql.Named("thumbname", thumbName), 
+		`,
+		sql.Named("thumbname", thumbName),
 		sql.Named("filename", filename))
 	if err != nil {
 		return err
@@ -183,23 +150,13 @@ func insertThumbnail(tx *sql.Tx, filename string, thumbnail Thumbnail) error {
 // But how many rows at once? I do not know
 // This has performed pretty reasonably in any case
 // The limiting performance factor is elsewhere (handling media files)
-func insertMedia(tx *sql.Tx, thumbnails []Thumbnail, metadata map[string]string, probes int) error {
+func insertMedia(tx *sql.Tx, thumbnails []Thumbnail, metadata map[string]string) error {
 	for _, thumbnail := range thumbnails {
 		err := insertThumbnail(tx, metadata["diskfilename"], thumbnail)
 		if err != nil {
 			log.Println(err)
 			return err
 		}
-	}
-
-	_, err := tx.Exec(`update filestats 
-		set probes = :probes
-		where filename = :filename;`,
-		sql.Named("filename", metadata["diskfilename"]),
-		sql.Named("probes", probes))
-	if err != nil {
-		log.Println(err)
-		return err
 	}
 
 	stmtMetadata, err := tx.Prepare(`
@@ -245,8 +202,8 @@ func AddFilesToDB(db *sql.DB, numWorkers int, probes int, path string) (int, err
 	}
 
 	type Reply struct {
-		stopped   bool
-		err       error
+		stopped bool
+		err     error
 		payload MediaInfo
 	}
 
@@ -269,26 +226,78 @@ func AddFilesToDB(db *sql.DB, numWorkers int, probes int, path string) (int, err
 
 				mediainfo, err := ParseMediaFile(req.filename, probes)
 				replies <- Reply{
-					stopped:   false,
-					err:       err,
+					stopped: false,
+					err:     err,
 					payload: mediainfo,
 				}
 			}
 		}
 	}
 
-	insertReply := func(tx *sql.Tx, reply Reply) error {
-		_, err := tx.Exec(`insert or replace into 
-			filestats (filename, filesize, probes, facechecked) 
-			values (:filename, :filesize, 0, 0);`, 
+	insertReply := func(db *sql.DB, reply Reply) error {
+		_, err := db.Exec(`insert or replace into 
+			filestat (filename, filesize) 
+			values (:filename, :filesize);`,
 			sql.Named("filename", reply.payload.filename),
 			sql.Named("filesize", reply.payload.fileinfo.Size()))
 		if err != nil {
 			return err
 		}
 
-		err = insertMedia(tx, reply.payload.thumbnails, reply.payload.metadata, probes)
+		if reply.err == errNotMediaFile {
+			return nil
+		}
+
+		tx, err := db.Begin()
 		if err != nil {
+			log.Println(err)
+			return err
+		}
+		defer tx.Rollback()
+
+		err = insertMedia(tx, reply.payload.thumbnails, reply.payload.metadata)
+		if err != nil {
+			return err
+		}
+
+		// This is a kind of awkward way to do this
+		_, err = tx.Exec(`insert or replace into 
+			mediastat (
+				filename, 
+				canseek, 
+				probes, 
+				facechecked,
+				bestthumb,
+				bestscore
+			) values (
+				:filename, 
+				:canseek, 
+				:probes, 
+				0,
+				(
+					select thumbname 
+					from thumbmap 
+					where filename = :filename
+					limit 1
+				),
+				0
+			);`,
+			sql.Named("filename", reply.payload.filename),
+			sql.Named("filesize", reply.payload.fileinfo.Size()),
+			sql.Named("canseek", reply.payload.canseek),
+			sql.Named("probes", probes))
+		if err != nil {
+			return err
+		}
+
+		err = tx.Commit()
+		if err != nil {
+			return err
+		}
+
+		err = Rescore(db, reply.payload.filename, false)
+		if err != nil {
+			log.Println(err)
 			return err
 		}
 
@@ -303,32 +312,15 @@ func AddFilesToDB(db *sql.DB, numWorkers int, probes int, path string) (int, err
 			return nil
 		}
 
-		if reply.err == errNotMediaFile {
-			return nil
-		}
-
 		if errors.Is(reply.err, os.ErrNotExist) {
 			return nil
 		}
 
-		if reply.err != nil {
+		if reply.err != nil && reply.err != errNotMediaFile {
 			return reply.err
 		}
 
-		tx, err := db.Begin()
-		if err != nil {
-			log.Println(err)
-			return err
-		}
-		defer tx.Rollback()
-
-		err = insertReply(tx, reply)
-		if err != nil {
-			log.Println(err)
-			return err
-		}
-
-		err = tx.Commit()
+		err = insertReply(db, reply)
 		if err != nil {
 			log.Println(err)
 			return err
@@ -347,7 +339,6 @@ func AddFilesToDB(db *sql.DB, numWorkers int, probes int, path string) (int, err
 		stop:     false,
 		filename: filenames[i],
 	}
-
 
 	for workerCount > 0 {
 		select {
@@ -389,7 +380,7 @@ func AddFilesToDB(db *sql.DB, numWorkers int, probes int, path string) (int, err
 func findMissingFiles(db *sql.DB) ([]string, error) {
 	missing := make([]string, 0, 10)
 
-	rows, err := db.Query(`select filename from filestats;`)
+	rows, err := db.Query(`select filename from filestat;`)
 	if err != nil {
 		log.Println(err)
 		return missing, err
@@ -400,16 +391,22 @@ func findMissingFiles(db *sql.DB) ([]string, error) {
 		var filename string
 		err = rows.Scan(&filename)
 		if err != nil {
-			log.Println(err)
 			return missing, err
 		}
 
-		_, err = os.Stat(filename)
+		// os.Stat returns PathErrors which don't always match os.ErrNotExist
+		// trying os.Open instead
+		fi, err := os.Open(filename)
 		if errors.Is(err, os.ErrNotExist) {
 			missing = append(missing, filename)
 			continue
 		}
 
+		if err != nil {
+			return missing, err
+		}
+
+		err = fi.Close()
 		if err != nil {
 			return missing, err
 		}
@@ -439,7 +436,8 @@ func cullMissing(db *sql.DB) error {
 	delqueries := []string{
 		"delete from tags where filename is ?;",
 		"delete from wordassocs where filename is ?;",
-		"delete from filestats where filename is ?;",
+		"delete from filestat where filename is ?;",
+		"delete from mediastat where filename is ?;",
 		"delete from thumbmap where filename is ?;",
 	}
 
@@ -469,7 +467,7 @@ func cullMissing(db *sql.DB) error {
 func filesNotInDB(db *sql.DB, filenames map[string]os.FileInfo) ([]string, error) {
 	newFiles := make([]string, 0, len(filenames))
 
-	rows, err := db.Query("select filename, filesize from filestats;")
+	rows, err := db.Query("select filename, filesize from filestat;")
 	if err != nil {
 		log.Println(err)
 		return newFiles, err
@@ -645,6 +643,8 @@ func wordassocs(db *sql.DB) error {
 func recls(dir string) (map[string]os.FileInfo, error) {
 	files := make(map[string]os.FileInfo)
 
+	badSuffixes := []string{"-wal", "-shm", "-journal"}
+
 	var ls func(string) error
 	ls = func(dir string) error {
 		entries, err := os.ReadDir(dir)
@@ -659,6 +659,17 @@ func recls(dir string) (map[string]os.FileInfo, error) {
 				if err != nil {
 					return err
 				}
+				continue
+			}
+
+			ok := true
+			for _, suffix := range badSuffixes {
+				if strings.HasSuffix(entry.Name(), suffix) {
+					ok = false
+					break
+				}
+			}
+			if !ok {
 				continue
 			}
 

@@ -134,4 +134,3 @@ func runQuery(db *sql.DB, query string, args []any) ([][]string, error) {
 
 	return results, nil
 }
-

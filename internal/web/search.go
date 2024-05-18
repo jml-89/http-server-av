@@ -200,4 +200,3 @@ func parseSearchTerms(formterms []string) SearchParameters {
 
 	return params
 }
-

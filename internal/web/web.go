@@ -1,4 +1,4 @@
-//HTTP request handling
+// HTTP request handling
 // Most of this is tying up the route and html template information
 package web
 
@@ -12,6 +12,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/jml-89/http-server-av/internal/util"
 )
 
 type Route struct {
@@ -41,21 +43,13 @@ func ServeThumbs(db *sql.DB) func(http.ResponseWriter, *http.Request) {
 // Routes are stored in the database too
 // Everything is in the database...
 func AddRoutes(db *sql.DB) error {
-	rows, err := db.Query(`select path from routes;`)
+	paths, err := util.AllRows1(db, `select path from routes;`, "")
 	if err != nil {
 		log.Println(err)
 		return err
 	}
-	defer rows.Close()
 
-	for rows.Next() {
-		var path string
-		err = rows.Scan(&path)
-		if err != nil {
-			log.Println(err)
-			return err
-		}
-
+	for _, path := range paths {
 		handler := createSuperSoftServe(db, path)
 		http.HandleFunc(path, handler)
 	}
@@ -63,21 +57,19 @@ func AddRoutes(db *sql.DB) error {
 	return nil
 }
 
-
-
 func thumbServer(db *sql.DB, w http.ResponseWriter, r *http.Request) {
-	filename := r.URL.Path[5:]
+	thumbname := r.URL.Path[5:]
 
 	var blob []byte
 	err := db.QueryRow(`
 		select image 
-		from thumbnails 
-		where filename is :filename;
-	`, sql.Named("filename", filename)).Scan(&blob)
+		from thumbnail
+		where thumbname is :thumbname;
+	`, sql.Named("thumbname", thumbname)).Scan(&blob)
 	if err != nil {
 		log.Printf(
-			"Wanted thumbnail for '%s', got: %v",
-			filename,
+			"Wanted thumbnail '%s', got: %v",
+			thumbname,
 			err,
 		)
 		return
@@ -229,8 +221,8 @@ func createSuperSoftServe(db *sql.DB, key string) http.HandlerFunc {
 	}
 }
 
-//Nothing saved, everything pulled from the database every time
-//Good for development & testing phase
+// Nothing saved, everything pulled from the database every time
+// Good for development & testing phase
 func superSoftServe(db *sql.DB, key string, w http.ResponseWriter, req *http.Request) {
 	row := db.QueryRow(`
 		select
@@ -294,7 +286,7 @@ func superSoftServe(db *sql.DB, key string, w http.ResponseWriter, req *http.Req
 	args := make([]any, 0, 10)
 	for k, vs := range req.Form {
 		v := vs[0]
-		if (req.Method == "GET") {
+		if req.Method == "GET" {
 			v, err = url.QueryUnescape(vs[0])
 			if err != nil {
 				log.Println(err)
@@ -389,4 +381,3 @@ func superSoftServe(db *sql.DB, key string, w http.ResponseWriter, req *http.Req
 func emptyHandler(w http.ResponseWriter, req *http.Request) {
 	// nothing! wahey
 }
-

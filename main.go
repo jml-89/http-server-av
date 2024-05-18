@@ -107,7 +107,7 @@ func main() {
 
 	go func() {
 		for {
-			_, err = av.AddFilesToDB(db, *flagConc, 2, pathMedia)
+			_, err = av.AddFilesToDB(db, *flagConc, 1, pathMedia)
 			if err != nil {
 				log.Println(err)
 				return
@@ -128,13 +128,23 @@ func main() {
 			_, err = ev.Run(db)
 			if err != nil {
 				log.Println(err)
-				return
+				if err.Error() == "database is locked" {
+					err = nil
+					time.Sleep(time.Duration(rand.Intn(30)) * time.Second)
+				} else {
+					return
+				}
 			}
 
 			numImproved, err := av.Improver(db)
 			if err != nil {
 				log.Println(err)
-				return
+				if err.Error() == "database is locked" {
+					err = nil
+					time.Sleep(time.Duration(rand.Intn(30)) * time.Second)
+				} else {
+					return
+				}
 			}
 
 			if numImproved == 0 {

@@ -339,4 +339,3 @@ func initTemplates(db *sql.DB) error {
 
 	return nil
 }
-
