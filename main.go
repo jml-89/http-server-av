@@ -13,9 +13,8 @@ import (
 	"os/signal"
 	"time"
 
-	"math"
-
 	"github.com/jml-89/http-server-av/internal/av"
+	"github.com/jml-89/http-server-av/internal/util"
 	"github.com/jml-89/http-server-av/internal/web"
 )
 
@@ -23,10 +22,6 @@ var flagPort = flag.Int("port", 8080, "webserver port")
 var flagPath = flag.String("path", ".", "directory to serve")
 var flagPathDB = flag.String("db", ".info.db", "media info database path")
 var flagConc = flag.Int("conc", 2, "number of concurrent file scanner / thumbnailers to run")
-
-func mySqrt(x int) int {
-	return int(math.Sqrt(float64(x)))
-}
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
@@ -56,14 +51,25 @@ func main() {
 	// Was NOT working for me
 	// This is a super cool feature though
 	// So easy to connect a Go func to sqlite3!
-	sql.Register("sqlite3_with_square_root", &sqlite3.SQLiteDriver{
+	// and can use it to attach a few other functions too
+	sql.Register("sqlite3_custom", &sqlite3.SQLiteDriver{
 		ConnectHook: func(conn *sqlite3.SQLiteConn) error {
-			return conn.RegisterFunc("sqrt", mySqrt, true)
+			err := conn.RegisterFunc("sqrt", util.MySqrt, true)
+			if err != nil {
+				return err
+			}
+
+			err = conn.RegisterFunc("scorefn", av.ScoreFunc, true)
+			if err != nil {
+				return err
+			}
+
+			return nil
 		},
 	})
 
 	log.Printf("Opening database %s\n", pathDb)
-	db, err := sql.Open("sqlite3_with_square_root", pathDb)
+	db, err := sql.Open("sqlite3_custom", pathDb)
 	if err != nil {
 		log.Fatalf("Failed to open %s: %s\n", pathDb, err)
 	}
@@ -158,6 +164,16 @@ func main() {
 		log.Println("HTTP server terminated, quitting...")
 	case _ = <-terminate:
 		log.Println("SIGINT received, quitting...")
+	}
+
+	_, err = db.Exec("pragma analyze_limit = 400;")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	_, err = db.Exec("pragma optimize;")
+	if err != nil {
+		log.Fatal(err)
 	}
 
 	return

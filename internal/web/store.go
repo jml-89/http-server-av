@@ -57,10 +57,10 @@ func getRouteVals(db *sql.DB, key string) (map[string]string, error) {
 }
 
 func runTemplateQueries(db *sql.DB, key string, inserts map[string]string, args []any) (map[string][][]string, error) {
-	names, queries, err := util.AllRows2(db, `
+	names, queries, err := util.AllRows2[string, string](db, `
 		select name, content
 		from templatequeries
-		where path is :key;`, "", "", sql.Named("key", key))
+		where path is :key;`, sql.Named("key", key))
 	if err != nil {
 		log.Println(err)
 		return nil, err

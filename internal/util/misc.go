@@ -2,7 +2,12 @@ package util
 
 import (
 	"database/sql"
+	"math"
 )
+
+func MySqrt(x int) int {
+	return int(math.Sqrt(float64(x)))
+}
 
 // Q: This is horrible, what are you doing?
 // A: Keeping read cursors open then doing more operations can cause issues in sqlite
@@ -10,7 +15,7 @@ import (
 // I want to make sure I'm always closing that read cursor as early as I can
 // Then I started thinking about writing a generic read function
 // And here we are
-func AllRows1[T any](db *sql.DB, query string, result T, args ...any) ([]T, error) {
+func AllRows1[T any](db *sql.DB, query string, args ...any) ([]T, error) {
 	results := make([]T, 0, 10)
 
 	rows, err := db.Query(query, args...)
@@ -20,6 +25,7 @@ func AllRows1[T any](db *sql.DB, query string, result T, args ...any) ([]T, erro
 	defer rows.Close()
 
 	for rows.Next() {
+		var result T
 		err = rows.Scan(&result)
 		if err != nil {
 			return results, err
@@ -34,7 +40,7 @@ func AllRows1[T any](db *sql.DB, query string, result T, args ...any) ([]T, erro
 // for the type safety, you know ("type safety", it's still going through some any&reflect)
 // the other option is array-of-arrays with any type
 // but then you're type wrangling at the call-site -- which also sucks
-func AllRows2[T1 any, T2 any](db *sql.DB, query string, result1 T1, result2 T2, args ...any) ([]T1, []T2, error) {
+func AllRows2[T1 any, T2 any](db *sql.DB, query string, args ...any) ([]T1, []T2, error) {
 	results1 := make([]T1, 0, 10)
 	results2 := make([]T2, 0, 10)
 
@@ -45,6 +51,8 @@ func AllRows2[T1 any, T2 any](db *sql.DB, query string, result1 T1, result2 T2, 
 	defer rows.Close()
 
 	for rows.Next() {
+		var result1 T1
+		var result2 T2
 		err = rows.Scan(&result1, &result2)
 		if err != nil {
 			return results1, results2, err

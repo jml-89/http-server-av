@@ -123,7 +123,7 @@ func insertThumbnail(tx *sql.Tx, filename string, thumbnail Thumbnail) error {
 	_, err := tx.Exec(`
 		insert or replace into 
 			thumbnail (thumbname, image, facechecked, area, confidence, quality, score) 
-			values (:filename, :image, 0, -1, -1, -1, -1);
+			values (:filename, :image, 0, 0, 0, 0, 0);
 		`,
 		sql.Named("filename", thumbName),
 		sql.Named("image", thumbnail.image))
@@ -295,7 +295,7 @@ func AddFilesToDB(db *sql.DB, numWorkers int, probes int, path string) (int, err
 			return err
 		}
 
-		err = Rescore(db, reply.payload.filename, false)
+		err = Rescore(db, reply.payload.filename)
 		if err != nil {
 			log.Println(err)
 			return err
@@ -501,7 +501,7 @@ func filesNotInDB(db *sql.DB, filenames map[string]os.FileInfo) ([]string, error
 // album, ALBUM, Album -> album
 // artist, ARTIST, Artist -> artist
 func fixtags(db *sql.DB) error {
-	tags, err := util.AllRows1(db, "select distinct(name) from tags;", "")
+	tags, err := util.AllRows1[string](db, "select distinct(name) from tags;")
 	if err != nil {
 		log.Println(err)
 		return err
@@ -583,12 +583,12 @@ func stringsplat(s, cutset string) []string {
 // word associations used for related videos and search refinement features
 // just takes tag contents, cleans them up, adds them to a key val table
 func wordassocs(db *sql.DB) error {
-	filenames, contents, err := util.AllRows2(db, `
+	filenames, contents, err := util.AllRows2[string, string](db, `
 		select filename, val 
 		from tags 
 		where filename not in (
 			select distinct(filename) 
-			from wordassocs);`, "", "")
+			from wordassocs);`)
 	if err != nil {
 		log.Println(err)
 		return err

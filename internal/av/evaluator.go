@@ -11,36 +11,78 @@ import (
 	"database/sql"
 	_ "github.com/mattn/go-sqlite3"
 	"log"
+	"math"
 
 	"github.com/jml-89/http-server-av/internal/avc"
 	"github.com/jml-89/http-server-av/internal/util"
 )
 
-func RescoreAll(db *sql.DB) error {
-	_, err := db.Exec(`update thumbnail set 
-		score = min(50000, area) 
-			* min(0.3, quality) 
-			* confidence;`)
+func ScoreFunc(area int, confidence float64, quality float64) float64 {
+	return math.Sqrt(math.Max(0.0, float64(area))) * confidence * quality
+}
+
+func ThumbCull(db *sql.DB, filename string) error {
+	thumbnames, err := util.AllRows1[string](db, `
+		with thebest as (
+			select 
+				thumbmap.thumbname
+			from 
+				thumbmap 
+			inner join
+				thumbnail
+			on 
+				thumbmap.filename = :filename
+			and
+				thumbmap.thumbname = thumbnail.thumbname
+			order by 
+				thumbnail.score desc
+			limit
+				4
+		), therest as (
+			select
+				thumbmap.thumbname
+			from 
+				thumbmap 
+			where	
+				thumbmap.filename = :filename
+			and
+				thumbmap.thumbname not in (
+					select 
+						thumbname 
+					from 
+						thebest
+				)
+		) select thumbname from therest;`, sql.Named("filename", filename))
 	if err != nil {
 		return err
 	}
 
-	_, err = db.Exec(`update mediastat set bestscore = 0 where bestscore is null;`)
+	if len(thumbnames) == 0 {
+		return nil
+	}
+
+	stmts := []string{
+		`delete from thumbnail where thumbname = :thumbname`,
+		`delete from thumbmap where thumbname = :thumbname`,
+		`delete from thumbface where thumbname = :thumbname`,
+	}
+
+	tx, err := db.Begin()
 	if err != nil {
 		return err
 	}
+	defer tx.Rollback()
 
-	_, err = db.Exec(`update mediastat set 
-		bestthumb = case when a.score > bestscore then a.thumbname else bestthumb end,
-		bestscore = max(bestscore, a.score)
-		from (
-			select x.filename, x.thumbname, y.score
-			from thumbmap x
-			inner join thumbnail y
-			on x.thumbname = y.thumbname
-		) a
-		where mediastat.bestthumb is null
-		and a.filename = mediastat.filename;`)
+	for _, thumbname := range thumbnames {
+		for _, stmt := range stmts {
+			_, err = tx.Exec(stmt, sql.Named("thumbname", thumbname))
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	err = tx.Commit()
 	if err != nil {
 		return err
 	}
@@ -48,32 +90,50 @@ func RescoreAll(db *sql.DB) error {
 	return nil
 }
 
-func Rescore(db *sql.DB, filename string, skipThumbScore bool) error {
+func RescoreAll(db *sql.DB) error {
+	_, err := db.Exec(`update thumbnail set 
+		score = scorefn(area, confidence, quality);`)
+	if err != nil {
+		return err
+	}
+
+	_, err = db.Exec(`update mediastat set 
+		bestthumb = a.thumbname,
+		bestscore = max(a.score)
+		from (
+			select x.filename, x.thumbname, y.score
+			from thumbmap x
+			inner join thumbnail y
+			on x.thumbname = y.thumbname
+		) a
+		where a.filename = mediastat.filename;`)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func Rescore(db *sql.DB, filename string) error {
 	stmts := []string{
 		`update thumbnail set 
-			score = min(50000, area) * min(0.3, quality) * confidence
+			score = scorefn(area, confidence, quality)
 		where thumbname in (
 			select thumbname 
 			from thumbmap 
 			where filename = :filename);`,
 
 		`update mediastat set 
-			bestthumb = b.thumbname,
-			bestscore = b.score
+			bestthumb = a.thumbname,
+			bestscore = max(a.score)
 		from (
-			select a.thumbname, b.score
-			from thumbmap a
-			inner join thumbnail b
-			on a.filename = :filename
-			and a.thumbname = b.thumbname
-			order by b.score desc
-			limit 1
-		) b
-		where filename = :filename;`,
-	}
-
-	if skipThumbScore {
-		stmts = stmts[1:]
+			select x.filename, x.thumbname, y.score
+			from thumbmap x
+			inner join thumbnail y
+			on x.filename = :filename
+			and x.thumbname = y.thumbname
+		) a
+		where a.filename = mediastat.filename;`,
 	}
 
 	for _, stmt := range stmts {
@@ -98,9 +158,8 @@ func NewEvaluator(threadCount int) (Evaluator, error) {
 func (e *Evaluator) Run(db *sql.DB) (int, error) {
 	count := 0
 
-	filenames, err := util.AllRows1(db,
+	filenames, err := util.AllRows1[string](db,
 		`select filename from mediastat where not facechecked;`,
-		"",
 	)
 
 	for _, filename := range filenames {
@@ -109,7 +168,12 @@ func (e *Evaluator) Run(db *sql.DB) (int, error) {
 			return count, err
 		}
 
-		err = Rescore(db, filename, false)
+		err = Rescore(db, filename)
+		if err != nil {
+			return count, err
+		}
+
+		err = ThumbCull(db, filename)
 		if err != nil {
 			return count, err
 		}
@@ -123,13 +187,13 @@ func (e *Evaluator) Run(db *sql.DB) (int, error) {
 func Improver(db *sql.DB) (int, error) {
 	count := 0
 
-	filenames, probeCounts, err := util.AllRows2(db,
+	filenames, probeCounts, err := util.AllRows2[string, int](db,
 		`select filename, probes
 		from mediastat
 		where facechecked
 		and canseek
 		and probes < 16
-		and bestscore < 15000.0;`, "", int(0))
+		and bestscore < scorefn(30000, 0.85, 0.6);`)
 	if err != nil {
 		log.Println(err)
 		return count, err
@@ -188,7 +252,7 @@ func Improver(db *sql.DB) (int, error) {
 }
 
 func (e *Evaluator) evaluate(db *sql.DB, filename string) error {
-	thumbnames, images, err := util.AllRows2(db, `
+	thumbnames, images, err := util.AllRows2[string, []byte](db, `
 		select thumbname, image
 		from thumbnail
 		where not facechecked
@@ -196,7 +260,7 @@ func (e *Evaluator) evaluate(db *sql.DB, filename string) error {
 			select thumbname
 			from thumbmap
 			where filename = :filename);
-		`, "", []byte(""), sql.Named("filename", filename))
+		`, sql.Named("filename", filename))
 	if err != nil {
 		return err
 	}
@@ -229,18 +293,22 @@ func (e *Evaluator) evaluate(db *sql.DB, filename string) error {
 				sql.Named("quality", face.Quality))
 		}
 
-		_, err = tx.Exec(`update thumbnail set
-					facechecked = 1,
-					area = sum(b.area),
-					confidence = avg(b.confidence),
-					quality = avg(b.quality)
-				from ( 
-					select area, confidence, quality
-					from thumbface
-					where thumbname = :thumbname
-				) as b
-				where thumbname = :thumbname;`,
-			sql.Named("thumbname", thumbname))
+		stmt := `update thumbnail set
+				facechecked = 1,
+				area = sum(b.area),
+				confidence = avg(b.confidence),
+				quality = avg(b.quality)
+			from ( 
+				select area, confidence, quality
+				from thumbface
+				where thumbname = :thumbname
+			) as b
+			where thumbname = :thumbname;`
+		if len(faces) == 0 {
+			stmt = `update thumbnail set facechecked = 1 where thumbname = :thumbname;`
+		}
+
+		_, err = tx.Exec(stmt, sql.Named("thumbname", thumbname))
 		if err != nil {
 			return err
 		}

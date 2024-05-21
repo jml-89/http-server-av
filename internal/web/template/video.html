@@ -45,10 +45,14 @@
 {{range $idx, $elem := .thumbs}}
 	<a class="media-item">
 		<img class="thumb-img" src="/tmb/{{index $elem 0 | escapepath}}"/>
-		<div class="media-title">Area: {{index $elem 1}}</div>
-		<div class="media-title">Confidence: {{index $elem 2}}</div>
-		<div class="media-title">Quality: {{index $elem 3}}</div>
-		<div class="media-title">Score: {{index $elem 4}}</div>
+		{{if gt (index $elem 1) "0"}}
+		<div class="media-title">Area: {{index $elem 2}}</div>
+		<div class="media-title">Confidence: {{index $elem 3}}</div>
+		<div class="media-title">Quality: {{index $elem 4}}</div>
+		<div class="media-title">Score: {{index $elem 5}}</div>
+		{{else}}
+		<div class="media-title">Unevaluated</div>
+		{{end}}
 	</a>
 {{end}}
 </div>

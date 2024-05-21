@@ -96,6 +96,7 @@ var routeDefaultQueries = map[string]map[string]string{
 		"thumbs": `
 			select 
 				thumbname, 
+				facechecked,
 				area,
 				confidence,
 				quality,

@@ -5,8 +5,10 @@ import (
 
 	"database/sql"
 	"errors"
-	_ "github.com/mattn/go-sqlite3"
+	"github.com/mattn/go-sqlite3"
 	"os"
+
+	"github.com/jml-89/http-server-av/internal/util"
 )
 
 import _ "embed"
@@ -14,27 +16,17 @@ import _ "embed"
 //go:embed testdata/subtitles.vtt
 var subtitles string
 
-func TestMissingFiles(t *testing.T) {
-	db, err := sql.Open("sqlite3", ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-
-	err = InitDB(db)
-	if err != nil {
-		t.Fatal(err)
-	}
-}
-
-// Test that text files and subtitle files are added
-// Also testing those files being removed too!
+// Text and subtitle files should be added to filestat but nowhere else
+// They're still monitored for changes and removal
 func TestAddRemoveFiles(t *testing.T) {
 	db, pathDir := createTestEnv(t)
 	defer db.Close()
 	defer os.RemoveAll(pathDir)
 
+	//ffmpeg treats text files as media, rendering them using a tty -> ansi demux/decode
 	pathText := createTextFile(t, pathDir)
+
+	//Subtitles are media-adjacent, ffmpeg will read them as media
 	pathSub := createSubtitleFile(t, pathDir)
 
 	n, err := AddFilesToDB(db, 1, 1, pathDir)
@@ -100,7 +92,23 @@ func TestAddRemoveFiles(t *testing.T) {
 }
 
 func createTestEnv(t *testing.T) (*sql.DB, string) {
-	db, err := sql.Open("sqlite3", ":memory:")
+	sql.Register("sqlite3_custom", &sqlite3.SQLiteDriver{
+		ConnectHook: func(conn *sqlite3.SQLiteConn) error {
+			err := conn.RegisterFunc("sqrt", util.MySqrt, true)
+			if err != nil {
+				return err
+			}
+
+			err = conn.RegisterFunc("scorefn", ScoreFunc, true)
+			if err != nil {
+				return err
+			}
+
+			return nil
+		},
+	})
+
+	db, err := sql.Open("sqlite3_custom", ":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,8 +126,6 @@ func createTestEnv(t *testing.T) (*sql.DB, string) {
 	return db, pathDir
 }
 
-// ffmpeg treats text files as media, rendering them using a tty -> ansi demux/decode
-// We would prefer to reject text files
 func createTextFile(t *testing.T, pathDir string) string {
 	tmpFile, err := os.CreateTemp(pathDir, "http-server-av.test.*.txt")
 	if err != nil {
@@ -139,9 +145,6 @@ func createTextFile(t *testing.T, pathDir string) string {
 	return tmpFile.Name()
 }
 
-// Subtitles are media-adjacent
-// ffmpeg will read them as media
-// But for now we reject
 func createSubtitleFile(t *testing.T, pathDir string) string {
 	tmpFile, err := os.CreateTemp(pathDir, "http-server-av.test.*.vtt")
 	if err != nil {

@@ -43,7 +43,7 @@ func ServeThumbs(db *sql.DB) func(http.ResponseWriter, *http.Request) {
 // Routes are stored in the database too
 // Everything is in the database...
 func AddRoutes(db *sql.DB) error {
-	paths, err := util.AllRows1(db, `select path from routes;`, "")
+	paths, err := util.AllRows1[string](db, `select path from routes;`)
 	if err != nil {
 		log.Println(err)
 		return err
