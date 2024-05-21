@@ -17,6 +17,7 @@ import (
 var errNotMediaFile = errors.New("File is not an image or video")
 var errSeekFailed = errors.New("Seek failed")
 
+// digest is the hex2str hash of the image
 type Thumbnail struct {
 	digest string
 	source string
