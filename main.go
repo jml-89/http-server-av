@@ -25,6 +25,8 @@ var flagConc = flag.Int("conc", 2, "number of concurrent file scanner / thumbnai
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
+	log.Println("http-server-av initialising")
+
 	flag.Parse()
 
 	if *flagPath != "." {
@@ -68,7 +70,6 @@ func main() {
 		},
 	})
 
-	log.Printf("Opening database %s\n", pathDb)
 	db, err := sql.Open("sqlite3_custom", pathDb)
 	if err != nil {
 		log.Fatalf("Failed to open %s: %s\n", pathDb, err)
@@ -87,13 +88,11 @@ func main() {
 		log.Fatalf("Failed to set journal_mode to wal (??): %s", err)
 	}
 
-	log.Printf("Initialising database: av side...\n")
 	err = av.InitDB(db)
 	if err != nil {
 		log.Fatalf("Failed to initialise DB tables: %s\n", err)
 	}
 
-	log.Printf("Initialising database: web side...\n")
 	err = web.InitDB(db)
 	if err != nil {
 		log.Fatalf("Failed to initialise DB tables: %s\n", err)
@@ -109,53 +108,40 @@ func main() {
 	terminate := make(chan os.Signal)
 	signal.Notify(terminate, os.Interrupt)
 
-	log.Printf("Initialisation complete, webserver running on port %d", *flagPort)
+	fmt.Printf("*\n*\tWebserver running on port %d\n*\n", *flagPort)
 
 	go func() {
+		ignores := []string{pathDb}
+		_, err := av.AddFilesToDB(db, ignores, *flagConc, pathMedia)
+		if err != nil {
+			log.Println(err)
+			return
+		}
+		log.Println("Initial media scan complete")
+		log.Println("Starting thumbnail improver")
+
+		go thumbImprover(db, *flagConc)
+
 		for {
-			_, err = av.AddFilesToDB(db, *flagConc, 1, pathMedia)
+			n, err := av.AddFilesToDB(db, ignores, *flagConc, pathMedia)
 			if err != nil {
 				log.Println(err)
 				return
 			}
 
+			if n > 0 {
+				_, err = db.Exec("pragma wal_checkpoint(TRUNCATE);")
+				if err != nil {
+					log.Println(err)
+					if err.Error() == "database is locked" {
+						err = nil
+					} else {
+						return
+					}
+				}
+			}
+
 			time.Sleep(time.Duration(rand.Intn(10)) * time.Second)
-		}
-	}()
-
-	go func() {
-		ev, err := av.NewEvaluator(*flagConc)
-		if err != nil {
-			log.Println(err)
-			return
-		}
-
-		for {
-			_, err = ev.Run(db)
-			if err != nil {
-				log.Println(err)
-				if err.Error() == "database is locked" {
-					err = nil
-					time.Sleep(time.Duration(rand.Intn(30)) * time.Second)
-				} else {
-					return
-				}
-			}
-
-			numImproved, err := av.Improver(db)
-			if err != nil {
-				log.Println(err)
-				if err.Error() == "database is locked" {
-					err = nil
-					time.Sleep(time.Duration(rand.Intn(30)) * time.Second)
-				} else {
-					return
-				}
-			}
-
-			if numImproved == 0 {
-				time.Sleep(time.Duration(rand.Intn(60)) * time.Second)
-			}
 		}
 	}()
 
@@ -177,4 +163,51 @@ func main() {
 	}
 
 	return
+}
+
+func thumbImprover(db *sql.DB, numThreads int) {
+	ev, err := av.NewEvaluator(numThreads)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+
+	for {
+		_, err = ev.Run(db)
+		if err != nil {
+			log.Println(err)
+			if err.Error() == "database is locked" {
+				err = nil
+				time.Sleep(time.Duration(rand.Intn(30)) * time.Second)
+			} else {
+				return
+			}
+		}
+
+		numImproved, err := av.Improver(db)
+		if err != nil {
+			log.Println(err)
+			if err.Error() == "database is locked" {
+				err = nil
+				time.Sleep(time.Duration(rand.Intn(30)) * time.Second)
+			} else {
+				return
+			}
+		}
+
+		if numImproved == 0 {
+			time.Sleep(time.Duration(rand.Intn(60)) * time.Second)
+			continue
+		}
+
+		_, err = db.Exec("pragma wal_checkpoint(TRUNCATE);")
+		if err != nil {
+			log.Println(err)
+			if err.Error() == "database is locked" {
+				err = nil
+			} else {
+				return
+			}
+		}
+	}
 }

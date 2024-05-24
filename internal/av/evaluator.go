@@ -12,6 +12,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	"log"
 	"math"
+	"math/rand"
 
 	"github.com/jml-89/http-server-av/internal/avc"
 	"github.com/jml-89/http-server-av/internal/util"
@@ -62,9 +63,9 @@ func ThumbCull(db *sql.DB, filename string) error {
 	}
 
 	stmts := []string{
+		`delete from thumbface where thumbname = :thumbname`,
 		`delete from thumbnail where thumbname = :thumbname`,
 		`delete from thumbmap where thumbname = :thumbname`,
-		`delete from thumbface where thumbname = :thumbname`,
 	}
 
 	tx, err := db.Begin()
@@ -192,8 +193,9 @@ func Improver(db *sql.DB) (int, error) {
 		from mediastat
 		where facechecked
 		and canseek
-		and probes < 16
-		and bestscore < scorefn(30000, 0.85, 0.6);`)
+		and ((probes < 10) or (probes < 30 and bestscore > 0))
+		and bestscore < scorefn(30000, 0.85, 0.6)
+		order by probes asc;`)
 	if err != nil {
 		log.Println(err)
 		return count, err
@@ -203,9 +205,9 @@ func Improver(db *sql.DB) (int, error) {
 		filename := filenames[i]
 		probes := probeCounts[i]
 
-		probes = probes * 2
+		probes += 1
 
-		thumbnails, canseek, err := CreateThumbnails(filename, probes)
+		thumbnail, canseek, err := CreateThumbnail(filename, rand.Float64())
 		if err != nil {
 			log.Printf("Failed to generate thumbnail for %s", filename)
 			return count, err
@@ -217,12 +219,12 @@ func Improver(db *sql.DB) (int, error) {
 		}
 		defer tx.Rollback()
 
-		for _, thumbnail := range thumbnails {
-			err = insertThumbnail(tx, filename, thumbnail)
-			if err != nil {
-				return count, err
-			}
+		//for _, thumbnail := range thumbnails {
+		err = insertThumbnail(tx, filename, thumbnail)
+		if err != nil {
+			return count, err
 		}
+		//}
 
 		_, err = tx.Exec(`
 			update mediastat

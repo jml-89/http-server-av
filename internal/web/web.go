@@ -224,7 +224,8 @@ func createSuperSoftServe(db *sql.DB, key string) http.HandlerFunc {
 // Nothing saved, everything pulled from the database every time
 // Good for development & testing phase
 func superSoftServe(db *sql.DB, key string, w http.ResponseWriter, req *http.Request) {
-	row := db.QueryRow(`
+	var path, method, templatename, redirect string
+	err := db.QueryRow(`
 		select
 			path,
 			method,
@@ -234,10 +235,8 @@ func superSoftServe(db *sql.DB, key string, w http.ResponseWriter, req *http.Req
 			routes
 		where
 			path is :key;
-		`, sql.Named("key", key))
-
-	var path, method, templatename, redirect string
-	err := row.Scan(&path, &method, &templatename, &redirect)
+		`, sql.Named("key", key),
+	).Scan(&path, &method, &templatename, &redirect)
 	if err != nil {
 		log.Println(err)
 		fmt.Fprintf(w, "%s", err)

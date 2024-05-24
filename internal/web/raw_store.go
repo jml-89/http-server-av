@@ -197,7 +197,6 @@ var routeDefaultQueries = map[string]map[string]string{
 		"videos": `
 			select filename, bestthumb
 			from mediastat
-			where bestthumb is not null
 			order by rowid desc 
 			limit 50;
 		`,
@@ -272,10 +271,9 @@ var routeDefaultQueries = map[string]map[string]string{
 
 	"/duplicates/": {
 		"dupes": `
-			select val, count(*)
-			from tags
-			where name = 'thumbname'
-			group by val
+			select bestthumb, count(*)
+			from mediastat
+			group by bestthumb 
 			having count(*) > 1;
 		`,
 	},

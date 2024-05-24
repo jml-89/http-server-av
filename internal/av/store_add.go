@@ -9,6 +9,8 @@ import (
 	"errors"
 	"log"
 	"os"
+	"path/filepath"
+	"strings"
 )
 
 type request struct {
@@ -27,10 +29,10 @@ type reply struct {
 // Majority of this function is orchestrating the goroutines
 // There may be opportunity to expand some error handling
 // However have not seen enough errors in testing to work on
-func AddFilesToDB(db *sql.DB, numWorkers int, probes int, path string) (int, error) {
+func AddFilesToDB(db *sql.DB, ignore []string, numWorkers int, path string) (int, error) {
 	count := 0
 
-	allFiles, err := recls(path)
+	allFiles, err := recls(path, ignore)
 	if err != nil {
 		return count, err
 	}
@@ -44,7 +46,7 @@ func AddFilesToDB(db *sql.DB, numWorkers int, probes int, path string) (int, err
 		return count, nil
 	}
 
-	count, err = orchestrateParsers(db, numWorkers, probes, filenames)
+	count, err = orchestrateParsers(db, numWorkers, filenames)
 	if err != nil {
 		return count, err
 	}
@@ -67,7 +69,7 @@ func AddFilesToDB(db *sql.DB, numWorkers int, probes int, path string) (int, err
 	return count, err
 }
 
-func orchestrateParsers(db *sql.DB, numWorkers int, probes int, filenames []string) (int, error) {
+func orchestrateParsers(db *sql.DB, numWorkers int, filenames []string) (int, error) {
 	count := 0
 
 	replies := make(chan reply)
@@ -82,7 +84,7 @@ func orchestrateParsers(db *sql.DB, numWorkers int, probes int, filenames []stri
 	req := request{
 		stop:     false,
 		filename: filenames[i],
-		probes:   probes,
+		probes:   1,
 	}
 
 	for workerCount > 0 {
@@ -144,7 +146,7 @@ func insertReply(db *sql.DB, reply reply) error {
 	}
 	defer tx.Rollback()
 
-	err = insertMedia(tx, reply.payload.thumbnails, reply.payload.metadata)
+	err = insertMedia(tx, []Thumbnail{reply.payload.thumbnail}, reply.payload.metadata)
 	if err != nil {
 		return err
 	}
@@ -196,7 +198,7 @@ func parser(requests <-chan request, replies chan<- reply) {
 				return
 			}
 
-			mediainfo, err := ParseMediaFile(req.filename, req.probes)
+			mediainfo, err := ParseMediaFile(req.filename)
 			replies <- reply{
 				stopped: false,
 				err:     err,
@@ -205,4 +207,99 @@ func parser(requests <-chan request, replies chan<- reply) {
 			}
 		}
 	}
+}
+
+func recls(dir string, ignores []string) (map[string]os.FileInfo, error) {
+	files := make(map[string]os.FileInfo)
+
+	badSuffixes := []string{"-wal", "-shm", "-journal"}
+
+	var ls func(string) error
+	ls = func(dir string) error {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return err
+		}
+
+		for _, entry := range entries {
+			ok := true
+			for _, ignore := range ignores {
+				if entry.Name() == ignore {
+					ok = false
+					break
+				}
+			}
+
+			if !ok {
+				continue
+			}
+
+			path := filepath.Join(dir, entry.Name())
+			if entry.IsDir() {
+				err = ls(path)
+				if err != nil {
+					return err
+				}
+				continue
+			}
+
+			for _, suffix := range badSuffixes {
+				if strings.HasSuffix(entry.Name(), suffix) {
+					ok = false
+					break
+				}
+			}
+
+			if !ok {
+				continue
+			}
+
+			files[path], err = entry.Info()
+			if err != nil {
+				return err
+			}
+		}
+
+		return nil
+	}
+
+	err := ls(dir)
+
+	return files, err
+}
+
+// Adds thumbnail and metadata to database in a transaction
+// You could consider updating more rows in a single transaction
+// But how many rows at once? I do not know
+// This has performed pretty reasonably in any case
+// The limiting performance factor is elsewhere (handling media files)
+func insertMedia(tx *sql.Tx, thumbnails []Thumbnail, metadata map[string]string) error {
+	for _, thumbnail := range thumbnails {
+		err := insertThumbnail(tx, metadata["diskfilename"], thumbnail)
+		if err != nil {
+			log.Println(err)
+			return err
+		}
+	}
+
+	stmtMetadata, err := tx.Prepare(`
+		insert or replace into 
+			  tags (filename, name, val) 
+			values (       ?,    ?,   ?);
+		`)
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+	defer stmtMetadata.Close()
+
+	for k, v := range metadata {
+		_, err = stmtMetadata.Exec(metadata["diskfilename"], strings.ToLower(k), v)
+		if err != nil {
+			log.Println(err)
+			return err
+		}
+	}
+
+	return nil
 }

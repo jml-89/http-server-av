@@ -29,7 +29,7 @@ func TestAddRemoveFiles(t *testing.T) {
 	//Subtitles are media-adjacent, ffmpeg will read them as media
 	pathSub := createSubtitleFile(t, pathDir)
 
-	n, err := AddFilesToDB(db, 1, 1, pathDir)
+	n, err := AddFilesToDB(db, []string{}, 1, pathDir)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -15,7 +15,6 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	"log"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/jml-89/http-server-av/internal/util"
@@ -140,42 +139,6 @@ func insertThumbnail(tx *sql.Tx, filename string, thumbnail Thumbnail) error {
 		sql.Named("filename", filename))
 	if err != nil {
 		return err
-	}
-
-	return nil
-}
-
-// Adds thumbnail and metadata to database in a transaction
-// You could consider updating more rows in a single transaction
-// But how many rows at once? I do not know
-// This has performed pretty reasonably in any case
-// The limiting performance factor is elsewhere (handling media files)
-func insertMedia(tx *sql.Tx, thumbnails []Thumbnail, metadata map[string]string) error {
-	for _, thumbnail := range thumbnails {
-		err := insertThumbnail(tx, metadata["diskfilename"], thumbnail)
-		if err != nil {
-			log.Println(err)
-			return err
-		}
-	}
-
-	stmtMetadata, err := tx.Prepare(`
-		insert or replace into 
-			  tags (filename, name, val) 
-			values (       ?,    ?,   ?);
-		`)
-	if err != nil {
-		log.Println(err)
-		return err
-	}
-	defer stmtMetadata.Close()
-
-	for k, v := range metadata {
-		_, err = stmtMetadata.Exec(metadata["diskfilename"], strings.ToLower(k), v)
-		if err != nil {
-			log.Println(err)
-			return err
-		}
 	}
 
 	return nil
@@ -442,51 +405,4 @@ func wordassocs(db *sql.DB) error {
 	}
 
 	return err
-}
-
-func recls(dir string) (map[string]os.FileInfo, error) {
-	files := make(map[string]os.FileInfo)
-
-	badSuffixes := []string{"-wal", "-shm", "-journal"}
-
-	var ls func(string) error
-	ls = func(dir string) error {
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			return err
-		}
-
-		for _, entry := range entries {
-			path := filepath.Join(dir, entry.Name())
-			if entry.IsDir() {
-				err = ls(path)
-				if err != nil {
-					return err
-				}
-				continue
-			}
-
-			ok := true
-			for _, suffix := range badSuffixes {
-				if strings.HasSuffix(entry.Name(), suffix) {
-					ok = false
-					break
-				}
-			}
-			if !ok {
-				continue
-			}
-
-			files[path], err = entry.Info()
-			if err != nil {
-				return err
-			}
-		}
-
-		return nil
-	}
-
-	err := ls(dir)
-
-	return files, err
 }

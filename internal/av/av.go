@@ -25,14 +25,14 @@ type Thumbnail struct {
 }
 
 type MediaInfo struct {
-	filename   string
-	fileinfo   os.FileInfo
-	thumbnails []Thumbnail
-	metadata   map[string]string
-	canseek    bool
+	filename  string
+	fileinfo  os.FileInfo
+	thumbnail Thumbnail
+	metadata  map[string]string
+	canseek   bool
 }
 
-func ParseMediaFile(filename string, probes int) (m MediaInfo, err error) {
+func ParseMediaFile(filename string) (m MediaInfo, err error) {
 	m.filename = filename
 
 	m.fileinfo, err = os.Lstat(filename)
@@ -60,7 +60,7 @@ func ParseMediaFile(filename string, probes int) (m MediaInfo, err error) {
 		return
 	}
 
-	m.thumbnails, m.canseek, err = CreateThumbnails(filename, probes)
+	m.thumbnail, m.canseek, err = CreateThumbnail(filename, 0.5)
 	if err != nil {
 		log.Printf("Failed to generate thumbnail for %s", filename)
 		// We don't bail out here because it's not the end of the world
