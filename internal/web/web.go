@@ -12,7 +12,9 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-
+	"io"
+	"path/filepath"
+	"os"
 	"github.com/jml-89/http-server-av/internal/util"
 )
 
@@ -59,25 +61,19 @@ func AddRoutes(db *sql.DB) error {
 
 func thumbServer(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	thumbname := r.URL.Path[5:]
+	thumbpath := filepath.Join(".thumbs", thumbname)
 
-	var blob []byte
-	err := db.QueryRow(`
-		select image 
-		from thumbnail
-		where thumbname is :thumbname;
-	`, sql.Named("thumbname", thumbname)).Scan(&blob)
+	fi, err := os.Open(thumbpath)
 	if err != nil {
-		log.Printf(
-			"Wanted thumbnail '%s', got: %v",
-			thumbname,
-			err,
-		)
+		log.Println(err)
+		fmt.Fprintf(w, err.Error())
 		return
 	}
 
-	_, err = w.Write(blob)
+	_, err = io.Copy(w, fi)
 	if err != nil {
 		log.Println(err)
+		fmt.Fprintf(w, err.Error())
 		return
 	}
 }

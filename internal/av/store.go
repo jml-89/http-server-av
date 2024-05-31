@@ -16,6 +16,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"path/filepath"
 
 	"github.com/jml-89/http-server-av/internal/util"
 )
@@ -84,7 +85,6 @@ func InitDB(db *sql.DB) error {
 
 		`create table if not exists thumbnail (
 			thumbname string,
-			image blob not null,
 			facechecked integer not null,
 			area integer not null,
 			confidence real not null,
@@ -118,14 +118,25 @@ func InitDB(db *sql.DB) error {
 }
 
 func insertThumbnail(tx *sql.Tx, filename string, thumbnail Thumbnail) error {
+	err := os.Mkdir(".thumbs", 0777)
+	if err != nil && !os.IsExist(err) {
+		log.Println(err)
+		return err
+	}
+
 	thumbName := fmt.Sprintf("%s.webp", thumbnail.digest)
-	_, err := tx.Exec(`
+	thumbPath := filepath.Join(".thumbs", thumbName)
+	err = os.WriteFile(thumbPath, thumbnail.image, 0666)
+	if err != nil {
+		return err
+	}
+
+	_, err = tx.Exec(`
 		insert or replace into 
-			thumbnail (thumbname, image, facechecked, area, confidence, quality, score) 
-			values (:filename, :image, 0, 0, 0, 0, 0);
+			thumbnail (thumbname, facechecked, area, confidence, quality, score) 
+			values (:filename, 0, 0, 0, 0, 0);
 		`,
-		sql.Named("filename", thumbName),
-		sql.Named("image", thumbnail.image))
+		sql.Named("filename", thumbName))
 	if err != nil {
 		return err
 	}

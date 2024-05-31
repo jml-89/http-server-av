@@ -111,7 +111,7 @@ func main() {
 	fmt.Printf("*\n*\tWebserver running on port %d\n*\n", *flagPort)
 
 	go func() {
-		ignores := []string{pathDb}
+		ignores := []string{".thumbs", pathDb}
 		_, err := av.AddFilesToDB(db, ignores, *flagConc, pathMedia)
 		if err != nil {
 			log.Println(err)

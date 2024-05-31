@@ -13,6 +13,7 @@ import (
 	"log"
 	"math"
 	"math/rand"
+	"path/filepath"
 
 	"github.com/jml-89/http-server-av/internal/avc"
 	"github.com/jml-89/http-server-av/internal/util"
@@ -201,7 +202,7 @@ func Improver(db *sql.DB) (int, error) {
 		return count, err
 	}
 
-	for i := 0; i < len(filenames); i++ {
+	for i, _ := range filenames {
 		filename := filenames[i]
 		probes := probeCounts[i]
 
@@ -254,8 +255,8 @@ func Improver(db *sql.DB) (int, error) {
 }
 
 func (e *Evaluator) evaluate(db *sql.DB, filename string) error {
-	thumbnames, images, err := util.AllRows2[string, []byte](db, `
-		select thumbname, image
+	thumbnames, err := util.AllRows1[string](db, `
+		select thumbname
 		from thumbnail
 		where not facechecked
 		and thumbname in (
@@ -267,11 +268,10 @@ func (e *Evaluator) evaluate(db *sql.DB, filename string) error {
 		return err
 	}
 
-	for i := 0; i < len(thumbnames); i++ {
-		thumbname := thumbnames[i]
-		image := images[i]
+	for _, thumbname := range thumbnames {
+		thumbpath := filepath.Join(".thumbs", thumbname)
 
-		faces, err := e.tmb.RunImageBuf(image)
+		faces, err := e.tmb.RunImage(thumbpath)
 		if err != nil {
 			log.Println(err)
 			return err
