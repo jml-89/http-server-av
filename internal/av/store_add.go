@@ -9,18 +9,17 @@ import (
 	"errors"
 	"log"
 	"os"
+	"sync"
 	"path/filepath"
 	"strings"
 )
 
 type request struct {
-	stop     bool
 	filename string
 	probes   int
 }
 
 type reply struct {
-	stopped bool
 	err     error
 	payload MediaInfo
 	request request
@@ -76,42 +75,34 @@ func orchestrateParsers(db *sql.DB, numWorkers int, filenames []string) (int, er
 	requests := make(chan request)
 	workerCount := numWorkers
 
+	var wg sync.WaitGroup
+	wg.Add(workerCount)
+
 	for i := 0; i < workerCount; i++ {
-		go parser(requests, replies)
+		go func() {
+			defer wg.Done()
+			parser(requests, replies)
+		}()
 	}
 
-	i := 0
-	req := request{
-		stop:     false,
-		filename: filenames[i],
-		probes:   1,
-	}
-
-	for workerCount > 0 {
-		select {
-		case reply := <-replies:
-			if reply.stopped {
-				workerCount--
-				continue
-			}
-
-			err := insertReply(db, reply)
-			if err != nil {
-				log.Println(err)
-				return count, err
-			}
-
-			count++
-
-		case requests <- req:
-			i++
-			if i < len(filenames) {
-				req.filename = filenames[i]
-			} else {
-				req.filename = ""
-				req.stop = true
-			}
+	go func() {
+		for _, filename := range filenames {
+			requests<- request{ filename: filename, probes: 1 }
 		}
+		close(requests)
+
+		wg.Wait()
+		close(replies)
+	}()
+
+	for reply := range replies {
+		err := insertReply(db, reply)
+		if err != nil {
+			log.Println(err)
+			return count, err
+		}
+
+		count++
 	}
 
 	return count, nil
@@ -190,21 +181,12 @@ func insertReply(db *sql.DB, reply reply) error {
 }
 
 func parser(requests <-chan request, replies chan<- reply) {
-	for {
-		select {
-		case req := <-requests:
-			if req.stop {
-				replies <- reply{stopped: true}
-				return
-			}
-
-			mediainfo, err := ParseMediaFile(req.filename)
-			replies <- reply{
-				stopped: false,
-				err:     err,
-				payload: mediainfo,
-				request: req,
-			}
+	for req := range requests {
+		mediainfo, err := ParseMediaFile(req.filename)
+		replies <- reply{
+			err:     err,
+			payload: mediainfo,
+			request: req,
 		}
 	}
 }
